@@ -363,7 +363,7 @@ void _si_fill_features(uint16_t pid, uint8_t sub_id, uint8_t *data)
 
     data[2] = feature_flags.value; // Feature flags value   
     data[3] = 0x00; // Feature flags 2 (unused)
-
+    
     data[16] = 0;
     data[17] = 0;
 
@@ -503,8 +503,9 @@ void _sinput_cmd_get_featureflags(uint8_t *buffer)
     uint16_t accel_g_range      = 8; // 8G 
     uint16_t gyro_dps_range     = 2000; // 2000 degrees per second
 
-    buffer[6] = 8;    // Polling rate (ms)
-    buffer[7] = 0x00; // Reserved
+    // Polling rate us
+    uint16_t polling_rate_us = 8000;
+    memcpy(&buffer[6], &polling_rate_us, sizeof(polling_rate_us));
 
     memcpy(&buffer[8], &accel_g_range, sizeof(accel_g_range)); // Accelerometer G range
     memcpy(&buffer[10], &gyro_dps_range, sizeof(gyro_dps_range)); // Gyroscope DPS range
