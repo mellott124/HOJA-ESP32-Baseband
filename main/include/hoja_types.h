@@ -95,10 +95,12 @@ typedef struct
     uint16_t magic;
 
     // Mac address of this device
+    // Used as a fallback only!
     uint8_t device_mac_switch[6];
 
     uint8_t device_mac_depreciated[6];
 
+    // Used as a fallback only!
     uint8_t device_mac_sinput[6];
 
     // Mac address of the Switch we are paired to
