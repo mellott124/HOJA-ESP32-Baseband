@@ -1,885 +1,391 @@
-/*
- * SPDX-FileCopyrightText: 2021-2022 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Unlicense OR CC0-1.0
- */
+// --------------------------------------------------------------------------
+// main.c — Virtual Boy → Nintendo Switch (ESP32) Firmware Entry
+// --------------------------------------------------------------------------
 
+#include <stdio.h>
+#include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+#include "driver/gpio.h"
+#include "nvs.h"
+#include "nvs_flash.h"
+#include "esp_bt.h"
+#include "esp_bt_main.h"
+#include "hoja.h"
+#include "core_bt_switch.h"
+#include "esp_gap_bt_api.h"
 #include "hoja_includes.h"
+#include "hoja_types.h"
 
-#define I2C_RX_BUFFER_SIZE 32 // Size of the input, plus a byte for ID
-#define I2C_TX_BUFFER_SIZE 24
+#define TAG "MAIN"
+#define HIGH 1
+#define LOW  0
 
-#define I2C_MSG_STATUS_IDX 4
-#define I2C_MSG_DATA_START 5
-#define I2C_MSG_CMD_IDX 3
+// --------------------------------------------------------------------------
+// GPIO MAPPING (Virtual Boy layout)
+// --------------------------------------------------------------------------
+#define GPIO_BTN_A          GPIO_NUM_35
+#define GPIO_BTN_B          GPIO_NUM_32
+#define GPIO_BTN_DPAD_U     GPIO_NUM_14 
+#define GPIO_BTN_DPAD_L     GPIO_NUM_7
+#define GPIO_BTN_DPAD_D     GPIO_NUM_8
+#define GPIO_BTN_DPAD_R     GPIO_NUM_13
+#define GPIO_BTN_C_U        GPIO_NUM_34 
+#define GPIO_BTN_C_L        GPIO_NUM_33
+#define GPIO_BTN_C_D        GPIO_NUM_38
+#define GPIO_BTN_C_R        GPIO_NUM_39
+#define GPIO_BTN_L          GPIO_NUM_5
+#define GPIO_BTN_R          GPIO_NUM_37
+#define GPIO_BTN_START      GPIO_NUM_20
+#define GPIO_BTN_SELECT     GPIO_NUM_4
+#define GPIO_BTN_SYNC       GPIO_NUM_2   // active-low SYNC button
 
-#define I2C_SLAVE_SCL_IO 20                    /*!< gpio number for i2c slave clock */
-#define I2C_SLAVE_SDA_IO 19                    /*!< gpio number for i2c slave data */
-#define I2C_SLAVE_NUM I2C_NUM_0                /*!< I2C port number for slave dev */
-#define ESP_SLAVE_ADDR 0x76
+// --------------------------------------------------------------------------
+// LED DEFINES (active-low RGB LED)
+// --------------------------------------------------------------------------
+#define HEART_BEAT_RED      GPIO_NUM_26
+#define HEART_BEAT_BLUE     GPIO_NUM_25
+#define HEART_BEAT_GREEN    GPIO_NUM_27
+#define GPIO_OUTPUT_LED_MASK ((1ULL<<HEART_BEAT_RED)|(1ULL<<HEART_BEAT_BLUE)|(1ULL<<HEART_BEAT_GREEN))
 
-#define I2C_TX_CRC_IDX 0
-#define I2C_TX_COUNTER_IDX 1
-#define I2C_TX_STATUS_IDX 2
+// --------------------------------------------------------------------------
+// APP GLOBAL STATE
+// --------------------------------------------------------------------------
+static bool bt_connected=false, bt_pairing=false, bt_error=false;
+hoja_settings_s global_loaded_settings={.magic=HOJA_MAGIC_NUM};
+hoja_live_s global_live_data={0};
 
-#define I2C_START_CMD_CRC_LEN 13
-
-// Last processed packet number from Host
-uint8_t _current_rx_packet_num = 0;
-uint8_t _current_tx_packet_num = 0;
-
-typedef struct
-{
-    uint8_t data[I2C_RX_BUFFER_SIZE];
-} packed_i2c_msg;
-
-uint64_t _time_global = 0;
-
-// Utilities
-uint64_t get_timestamp_us()
-{
-    _time_global = esp_timer_get_time();
-
-    return _time_global;
-}
-
-uint64_t get_timestamp_ms()
-{
-    return get_timestamp_us()/1000;
-}
-
-uint8_t _i2c_buffer_in[I2C_RX_BUFFER_SIZE];
-uint8_t _i2c_buffer_out[I2C_TX_BUFFER_SIZE];
-
-volatile bool _internal_adc_active = false;
-adc_oneshot_unit_handle_t _adc1_handle;
-adc_unit_t _adc1 = ADC_UNIT_1;
-adc_oneshot_unit_init_cfg_t _adc_init_config1 = {
-    .unit_id = ADC_UNIT_1,
-};
-adc_channel_t _internal_adc_channel = 0;
-
-QueueHandle_t main_receive_queue;
-
-// Polynomial for CRC-8 (x^8 + x^2 + x + 1)
-#define CRC8_POLYNOMIAL 0x07
-
-uint8_t crc8_compute(uint8_t *data, size_t length)
-{
-    uint8_t crc = 0x00; // Initial value of CRC
-    for (size_t i = 0; i < length; i++)
-    {
-        crc ^= data[i]; // XOR the next byte into the CRC
-
-        for (uint8_t j = 0; j < 8; j++)
-        {
-            if (crc & 0x80)
-            { // If the MSB is set
-                crc = (crc << 1) ^ CRC8_POLYNOMIAL;
-            }
-            else
-            {
-                crc <<= 1;
-            }
-        }
-    }
-
-    if (!crc)
-        crc++; // Must be non-zero
-
-    return crc;
-}
-
-bool crc8_verify(uint8_t *data, size_t length, uint8_t received_crc)
-{
-    uint8_t calculated_crc = crc8_compute(data, length);
-    return calculated_crc == received_crc;
-}
-
-typedef void (*bluetooth_input_cb_t)(i2cinput_input_s *);
-
-// Input callback pointer
-bluetooth_input_cb_t _bluetooth_input_cb = NULL;
-
-// Our loaded configuration data
-hoja_settings_s global_loaded_settings = {0};
-hoja_live_s global_live_data = {0};
-
-// Our buffer for outgoing i2cinput messages
-#define I2C_STATUS_BUFFER_SIZE 32
-uint8_t _i2c_status_buffer[I2C_STATUS_BUFFER_SIZE][I2C_TX_BUFFER_SIZE];
-
-typedef struct
-{
-    size_t size;
-    size_t head;
-    size_t tail;
-    size_t count;
-} RingBuffer;
-
-RingBuffer _status_ringbuffer = {.size = I2C_STATUS_BUFFER_SIZE};
-
-// Add data to the ring buffer
-bool ringbuffer_set(RingBuffer *rb, uint8_t *data)
-{
-    //xSemaphoreTake(mutex_handle, portMAX_DELAY);
-
-    if (rb->count == rb->size)
-    {
-        // Buffer is full
-        // Buffer is full, reset the buffer
-        printf("Buffer full - RX Packet num: 0x%x\n", _current_rx_packet_num);
-        printf("TX Packet num: 0x%x\n", _current_tx_packet_num);
-
-        rb->head = 0;
-        rb->tail = 0;
-        rb->count = 0;
-    }
-
-    memcpy(&(_i2c_status_buffer[rb->head]), data, I2C_TX_BUFFER_SIZE);
-    rb->head = (rb->head + 1) % rb->size;
-    rb->count++;
-    //xSemaphoreGive(mutex_handle);
-    return true;
-}
-
-// Get data from the ring buffer
-uint8_t *ringbuffer_get(RingBuffer *rb)
-{
-    //xSemaphoreTake(mutex_handle, portMAX_DELAY);
-    if (rb->count == 0)
-    {
-        // Buffer is empty
-        //xSemaphoreGive(mutex_handle);
-        //printf("rx empty...\n");
-        return NULL;
-    }
-    //printf("rx OK...\n");
-    uint8_t *data = _i2c_status_buffer[rb->tail];
-    rb->tail = (rb->tail + 1) % rb->size;
-    rb->count--;
-    //xSemaphoreGive(mutex_handle);
-    return data;
-}
-
-// Loads messages into our cross-core buffer
-void ringbuffer_load_threadsafe(uint8_t *data)
-{
-
-    if(uxQueueSpacesAvailable(main_receive_queue) <= 1)
-    {
-        printf("Queue full\n");
-        xQueueReset(main_receive_queue);
-    }
-        
-
-    static packed_i2c_msg msg = {0};
-    memcpy(&(msg.data[0]), data, I2C_TX_BUFFER_SIZE);
-    xQueueSend(main_receive_queue, &msg, 0);
-}
-
-volatile bool haptic_buffer_connected = false;
-// Obtain messages from our cross-core buffer
-void ringbuffer_unload_threadsafe()
-{
-    static packed_i2c_msg msg = {0};
-    while(xQueueReceive(main_receive_queue, &msg, 0) == pdTRUE)
-    {
-        if(!haptic_buffer_connected)
-        {
-            // Check if it's haptic data. Do not send if so
-            i2cinput_status_s tmp = {0};
-            memcpy(&tmp, &msg.data[I2C_TX_STATUS_IDX], sizeof(i2cinput_status_s));
-
-            if(tmp.cmd != I2C_STATUS_HAPTIC_STANDARD)
-                ringbuffer_set(&_status_ringbuffer, &(msg.data[0]));
-        }
-        else ringbuffer_set(&_status_ringbuffer, &(msg.data[0]));
-            
-    }
-}
-
-static volatile uint64_t _app_report_timer_us = 8000; // Default 8ms
-static volatile uint64_t _app_report_timer_us_default = 8000;
+static volatile uint64_t _app_report_timer_us = 16000;
+static volatile uint64_t _app_report_timer_us_default = 16000;
 static volatile bool _sniff = true;
 
-void app_set_report_timer(uint64_t timer_us)
+uint8_t _i2c_buffer_in[32];
+
+
+// --------------------------------------------------------------------------
+// NVS: SAVE / LOAD APPLICATION SETTINGS
+// --------------------------------------------------------------------------
+void app_settings_save(void)
 {
-    _app_report_timer_us_default = timer_us;
-
-    if(!_sniff)
-    {
-        _app_report_timer_us = _app_report_timer_us_default;
-    }
-}
-
-uint64_t app_get_report_timer()
-{
-    return _app_report_timer_us;
-}
-
-/* HCI mode defenitions */
-#define HCI_MODE_ACTIVE                 0x00
-#define HCI_MODE_HOLD                   0x01
-#define HCI_MODE_SNIFF                  0x02
-#define HCI_MODE_PARK                   0x03
-
-// This is used
-void btm_hcif_mode_change_cb(bool succeeded, uint16_t hci_handle, uint8_t mode, uint16_t interval)
-{
-    if (!succeeded) {
-        printf("HCI mode change event failed\n");
+    nvs_handle_t h;
+    if(nvs_open("hoja",NVS_READWRITE,&h)!=ESP_OK){
+        ESP_LOGE(TAG,"NVS open fail (save)");
         return;
     }
+    nvs_set_blob(h,"settings",&global_loaded_settings,sizeof(global_loaded_settings));
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG,"Settings saved");
+}
 
-    switch (mode) {
-        case HCI_MODE_ACTIVE:
-            printf("Connection handle 0x%04x is in ACTIVE mode.\n", hci_handle);
-            // Handle ACTIVE mode
-            _sniff = false;
-            _app_report_timer_us = _app_report_timer_us_default;
-            break;
+void app_settings_load(void)
+{
+    nvs_handle_t h;
+    esp_err_t e=nvs_open("hoja",NVS_READWRITE,&h);
+    if(e!=ESP_OK){
+        ESP_LOGW(TAG,"NVS open fail (load)");
+        memset(&global_loaded_settings,0,sizeof(global_loaded_settings));
+        global_loaded_settings.magic=HOJA_MAGIC_NUM;
+        return;
+    }
+    size_t len=sizeof(global_loaded_settings);
+    e=nvs_get_blob(h,"settings",&global_loaded_settings,&len);
+    if(e!=ESP_OK){
+        ESP_LOGW(TAG,"No settings in NVS");
+        memset(&global_loaded_settings,0,sizeof(global_loaded_settings));
+        global_loaded_settings.magic=HOJA_MAGIC_NUM;
+    }
+    nvs_close(h);
 
-        case HCI_MODE_SNIFF:
-            printf("Connection handle 0x%04x is in SNIFF mode. Interval: %d ms\n", hci_handle, interval);
-            // Handle SNIFF mode
-            
-            _sniff = true;
-            _app_report_timer_us = interval*1000;//_ns_interval_to_us(interval);
-            break;
-
-        default:
-            printf("Connection handle 0x%04x is in an unknown mode (%d). Interval: %d slots\n", hci_handle, mode, interval);
-            break;
+    if(global_loaded_settings.magic != HOJA_MAGIC_NUM) {
+        ESP_LOGW(TAG,"Settings invalid — restoring defaults");
+        memset(&global_loaded_settings,0,sizeof(global_loaded_settings));
+        global_loaded_settings.magic=HOJA_MAGIC_NUM;
+        app_settings_save();
     }
 }
 
-// Only call from core 1
-uint8_t app_core1_get_packet_counter()
+// --------------------------------------------------------------------------
+// ENSURE VALID BLUETOOTH MAC ADDRESS
+// --------------------------------------------------------------------------
+static void sanitize_mac(uint8_t *mac)
 {
-    static uint16_t counter = 0;
-    counter = (counter+1) % 0xFF;
-    return (uint8_t) counter;
-}
-
-// Only call from core 1
-void app_set_connected_status(uint8_t status)
-{
-    uint8_t conn_buffer[I2C_TX_BUFFER_SIZE] = {0};
-    i2cinput_status_s conn_status = {
-        .cmd = I2C_STATUS_CONNECTED_STATUS,
-    };
-
-    conn_status.data[0] = status;
-    conn_status.rand_seed = esp_random() % 0xFFFF;
-
-    memcpy(&(conn_buffer[I2C_TX_STATUS_IDX]), &conn_status, sizeof(i2cinput_status_s));
-
-    uint8_t crc = crc8_compute((uint8_t *) &conn_status, sizeof(i2cinput_status_s));
-    conn_buffer[I2C_TX_CRC_IDX] = crc;
-    conn_buffer[I2C_TX_COUNTER_IDX] = app_core1_get_packet_counter();
-
-    ringbuffer_load_threadsafe(conn_buffer);
-}
-
-bool app_compare_mac(uint8_t *mac_1, uint8_t *mac_2)
-{
-    ESP_LOGI("app_compare_mac", "Mac 1:");
-    esp_log_buffer_hex("Switch HOST: ", mac_1, 6);
-    esp_log_buffer_hex("Saved HOST: ", mac_2, 6);
-
-    for (uint8_t i = 0; i < 6; i++)
-    {
-        if (mac_1[i] != mac_2[i])
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
-// Only call from core 1
-void app_set_power_setting(i2c_power_code_t power)
-{
-    uint8_t power_buffer[I2C_TX_BUFFER_SIZE] = {0};
-    i2cinput_status_s power_status = {
-        .cmd = I2C_STATUS_POWER_CODE,
-    };
-
-    power_status.data[0] = power;
-    power_status.rand_seed = esp_random() % 0xFFFF;
-
-    memcpy(&(power_buffer[I2C_TX_STATUS_IDX]), &power_status, sizeof(i2cinput_status_s));
-
-    uint8_t crc = crc8_compute((uint8_t *) &power_status, sizeof(i2cinput_status_s));
-    power_buffer[I2C_TX_CRC_IDX] = crc;
-    power_buffer[I2C_TX_COUNTER_IDX] = app_core1_get_packet_counter();
-
-    ringbuffer_load_threadsafe(power_buffer);
-    //ringbuffer_set(&_status_ringbuffer, power_buffer);
-}
-
-// Only call from core 1
-void app_set_switch_haptic(uint8_t *data)
-{
-    uint8_t haptic_buffer[I2C_TX_BUFFER_SIZE] = {0};
-    i2cinput_status_s haptic_status = {
-        .cmd = I2C_STATUS_HAPTIC_SWITCH,
-    };
-
-    // Copy haptic data into status
-    memcpy(&(haptic_status.data), data, 8);
-    // Generate random seed
-    haptic_status.rand_seed = esp_random() % 0xFFFF;
-
-    // Copy haptic_status into haptic_buffer
-    memcpy(&(haptic_buffer[I2C_TX_STATUS_IDX]), &haptic_status, sizeof(i2cinput_status_s));
-
-    // Set the CRC at byte 0 of our outgoing data
-    uint8_t crc = crc8_compute((uint8_t *)&haptic_status, sizeof(i2cinput_status_s));
-    haptic_buffer[I2C_TX_CRC_IDX] = crc;
-    haptic_buffer[I2C_TX_COUNTER_IDX] = app_core1_get_packet_counter();
-
-    ringbuffer_load_threadsafe(haptic_buffer);
-    //ringbuffer_set(&_status_ringbuffer, haptic_buffer);
-}
-
-// Only call from core 1
-void app_set_standard_haptic(uint8_t left, uint8_t right)
-{
-    uint8_t haptic_buffer[I2C_TX_BUFFER_SIZE] = {0};
-    i2cinput_status_s haptic_status = {
-        .cmd = I2C_STATUS_HAPTIC_STANDARD,
-    };
-
-    // Copy haptic data into status
-    haptic_status.data[0] = left;
-    haptic_status.data[1] = right;
-
-    // Generate random seed
-    haptic_status.rand_seed = esp_random() % 0xFFFF;
-
-    // Copy haptic_status into haptic_buffer
-    memcpy(&(haptic_buffer[I2C_TX_STATUS_IDX]), &haptic_status, sizeof(i2cinput_status_s));
-
-    // Set the CRC at byte 0 of our outgoing data
-    uint8_t crc = crc8_compute((uint8_t *)&haptic_status, sizeof(i2cinput_status_s));
-    haptic_buffer[I2C_TX_CRC_IDX] = crc;
-    haptic_buffer[I2C_TX_COUNTER_IDX] = app_core1_get_packet_counter();
-
-    ringbuffer_load_threadsafe(haptic_buffer);
-}
-
-// Only call from core 1
-void app_set_sinput_haptic(uint8_t *data, uint8_t len)
-{
-    uint8_t haptic_buffer[I2C_TX_BUFFER_SIZE] = {0};
-    i2cinput_status_s haptic_status = {
-        .cmd = I2C_STATUS_HAPTIC_SINPUT,
-    };
-
-    // Copy haptic data into status
-    memcpy(haptic_status.data, data, len);
-
-    // Generate random seed
-    haptic_status.rand_seed = esp_random() % 0xFFFF;
-
-    // Copy haptic_status into haptic_buffer
-    memcpy(&(haptic_buffer[I2C_TX_STATUS_IDX]), &haptic_status, sizeof(i2cinput_status_s));
-
-    // Set the CRC at byte 0 of our outgoing data
-    uint8_t crc = crc8_compute((uint8_t *)&haptic_status, sizeof(i2cinput_status_s));
-
-    haptic_buffer[I2C_TX_CRC_IDX] = crc;
-    haptic_buffer[I2C_TX_COUNTER_IDX] = app_core1_get_packet_counter();
-
-    ringbuffer_load_threadsafe(haptic_buffer);
-}
-
-// Function to generate a random MAC address and write it to the buffer
-void generate_random_mac(uint8_t *mac) {
-
-    // Generate random values for each byte of the MAC address
+    mac[0] &= 0xFC;
+    bool allzero = true;
     for (int i = 0; i < 6; i++) {
-        mac[i] = (uint8_t)(esp_random() % 256);
+        if (mac[i] != 0x00) { allzero = false; break; }
     }
-
-    // Set the locally administered bit (bit 1 of the first byte) 
-    // and clear the multicast bit (bit 0)
-    mac[0] = (mac[0] & 0xFE) | 0x02;
+    if (allzero) {
+        ESP_LOGW(TAG, "MAC all zeros — using hardware MAC instead");
+        esp_read_mac(mac, ESP_MAC_BT);
+    }
 }
 
-void settings_default()
+// --------------------------------------------------------------------------
+// GPIO INITIALIZATION
+// --------------------------------------------------------------------------
+static void gpio_input_init(void)
 {
-    memset(&global_loaded_settings, 0, sizeof(hoja_settings_s));
-    global_loaded_settings.magic = HOJA_MAGIC_NUM;
+    gpio_config_t c={0};
+    uint64_t inputs_mask=
+        ((1ULL<<GPIO_BTN_A)|(1ULL<<GPIO_BTN_B)|(1ULL<<GPIO_BTN_DPAD_U)|(1ULL<<GPIO_BTN_DPAD_D)|
+         (1ULL<<GPIO_BTN_DPAD_L)|(1ULL<<GPIO_BTN_DPAD_R)|(1ULL<<GPIO_BTN_L)|(1ULL<<GPIO_BTN_R)|
+         (1ULL<<GPIO_BTN_START)|(1ULL<<GPIO_BTN_SELECT)|(1ULL<<GPIO_BTN_C_U)|(1ULL<<GPIO_BTN_C_D)|
+         (1ULL<<GPIO_BTN_C_L)|(1ULL<<GPIO_BTN_C_R));
 
-    memset(&global_loaded_settings.paired_host_switch_mac, 0, 6);
-    generate_random_mac(global_loaded_settings.device_mac_switch);
+    c.pin_bit_mask=inputs_mask;
+    c.mode=GPIO_MODE_INPUT;
+    gpio_config(&c);
 
-    memset(&global_loaded_settings.paired_host_sinput_mac, 0, 6);
-    generate_random_mac(global_loaded_settings.device_mac_sinput);
+    c.pin_bit_mask=(1ULL<<GPIO_BTN_SYNC);
+    c.mode=GPIO_MODE_INPUT;
+    c.pull_up_en=GPIO_PULLUP_ENABLE;
+    gpio_config(&c);
+
+    c.pin_bit_mask=GPIO_OUTPUT_LED_MASK;
+    c.mode=GPIO_MODE_OUTPUT;
+    gpio_config(&c);
+
+    gpio_set_level(HEART_BEAT_RED,LOW);   vTaskDelay(pdMS_TO_TICKS(120));
+    gpio_set_level(HEART_BEAT_RED,HIGH);
+    gpio_set_level(HEART_BEAT_GREEN,LOW); vTaskDelay(pdMS_TO_TICKS(120));
+    gpio_set_level(HEART_BEAT_GREEN,HIGH);
+    gpio_set_level(HEART_BEAT_BLUE,LOW);  vTaskDelay(pdMS_TO_TICKS(120));
+    gpio_set_level(HEART_BEAT_BLUE,HIGH);
 }
 
-void app_settings_save()
+// --------------------------------------------------------------------------
+// HEARTBEAT LED TASK
+// --------------------------------------------------------------------------
+static void heartbeat_task(void*arg)
 {
-    const char* TAG = "hoja_settings_saveall";
-    nvs_handle_t my_handle;
-    esp_err_t err;
-    // Open
-    err = nvs_open(HOJA_SETTINGS_NAMESPACE, NVS_READWRITE, &my_handle);
-    if (err != ESP_OK) 
-    {
-        ESP_LOGE(TAG, "During HOJA settings save, NVS storage failed to open.");
-        return;
+    while(true){
+        gpio_set_level(HEART_BEAT_RED,HIGH);
+        gpio_set_level(HEART_BEAT_GREEN,HIGH);
+        gpio_set_level(HEART_BEAT_BLUE,HIGH);
+
+        if(bt_error){
+            gpio_set_level(HEART_BEAT_RED,LOW);
+            vTaskDelay(pdMS_TO_TICKS(800));
+            gpio_set_level(HEART_BEAT_RED,HIGH);
+            vTaskDelay(pdMS_TO_TICKS(800));
+        } else if(bt_connected){
+            gpio_set_level(HEART_BEAT_GREEN,LOW);
+            vTaskDelay(pdMS_TO_TICKS(400));
+            gpio_set_level(HEART_BEAT_GREEN,HIGH);
+            vTaskDelay(pdMS_TO_TICKS(400));
+        } else if(bt_pairing){
+            gpio_set_level(HEART_BEAT_BLUE,LOW);
+            vTaskDelay(pdMS_TO_TICKS(400));
+            gpio_set_level(HEART_BEAT_BLUE,HIGH);
+            vTaskDelay(pdMS_TO_TICKS(400));
+        } else {
+            gpio_set_level(HEART_BEAT_BLUE,LOW);
+            vTaskDelay(pdMS_TO_TICKS(150));
+            gpio_set_level(HEART_BEAT_BLUE,HIGH);
+            vTaskDelay(pdMS_TO_TICKS(1250));
+        }
     }
-
-    nvs_set_blob(my_handle, "hoja_settings", &global_loaded_settings, sizeof(hoja_settings_s));
-
-    nvs_commit(my_handle);
-    nvs_close(my_handle);
-
-    return;
 }
 
-// Send updated host MAC address so the host device can save it for later
-void app_save_host_mac(input_mode_t mode, uint8_t *address)
+// --------------------------------------------------------------------------
+// RESTART BLUETOOTH PAIRING
+// --------------------------------------------------------------------------
+static void restart_bluetooth_pairing(void)
 {
-    ESP_LOGI("app_save_host_mac", "Saving new host mac...");
+    ESP_LOGW(TAG,"Restarting for pairing...");
+    bt_pairing=true; bt_connected=false; bt_error=false;
 
-    uint8_t *write_address = NULL;
-    
-    switch(mode)
-    {
-        default:
-        case INPUT_MODE_SWPRO:
-            write_address = global_loaded_settings.paired_host_switch_mac;
-        break;
+    memset(global_loaded_settings.paired_host_switch_mac,0,6);
+    esp_read_mac(global_loaded_settings.device_mac_switch, ESP_MAC_BT);
+    sanitize_mac(global_loaded_settings.device_mac_switch);
+    app_settings_save();
+    memset(global_live_data.current_mac,0,sizeof(global_live_data.current_mac));
 
-        case INPUT_MODE_SINPUT:
-            write_address = global_loaded_settings.paired_host_sinput_mac;
-        break;
-    }
+    esp_bluedroid_disable();
+    esp_bluedroid_deinit();
+    esp_bt_controller_disable();
+    esp_bt_controller_deinit();
 
-    if(write_address!=NULL)
-    {
-        write_address[0] = address[0];
-        write_address[1] = address[1];
-        write_address[2] = address[2];
-        write_address[3] = address[3];
-        write_address[4] = address[4];
-        write_address[5] = address[5];
-
-        app_settings_save();
-    }
+    vTaskDelay(pdMS_TO_TICKS(300));
+    esp_restart();
 }
 
-// Returns if power is good or not
-bool app_process_internal_adc()
+// --------------------------------------------------------------------------
+// CONTROLLER INPUT TASK (reads GPIO + handles SYNC button + LEDs)
+// --------------------------------------------------------------------------
+static void controller_task(void* arg)
 {
-    if(_internal_adc_active)
+    bool sync_prev_high = true;
+    int64_t sync_t0 = 0;
+    bool sync_fire = false, seen_rel = false;
+    const int LONG_MS = 2000, ARM_MS = 3000;
+    int64_t boot_t0 = esp_timer_get_time();
+
+    ESP_LOGI(TAG, "Monitoring SYNC pin (GPIO%d)", GPIO_BTN_SYNC);
+
+    i2cinput_input_s input = {0};
+
+    while (true)
     {
-        static int adc_counter = 1000;
-        // This runs the ADC counter every 1000 cycles (1 second)
-        if(adc_counter++ < 1000)
-        {
-            return true;
-        }
-        adc_counter = 0;
+        // --- Handle SYNC button ---
+        bool level_high = gpio_get_level(GPIO_BTN_SYNC);
+        int64_t now = esp_timer_get_time();
+        int64_t uptime_ms = (now - boot_t0) / 1000;
+        if (level_high) seen_rel = true;
 
-        // Read the ADC value
-        // and update the battery status
-        int reading = 0;
-        ESP_ERROR_CHECK(adc_oneshot_read(_adc1_handle, _internal_adc_channel, &reading));
-        uint16_t raw_voltage = (uint16_t) reading;
-
-        // ESP_LOGI("VRAW:", "Raw Voltage: %d", raw_voltage);
-
-        static uint8_t current_bat_lvl = 0;
-
-        #define VOLTAGE_MEASURE_OFFSET  0.367f
-        #define VOLTAGE_LEVEL_CRITICAL  3.125f
-        #define VOLTAGE_LEVEL_LOW       3.3f
-        #define VOLTAGE_LEVEL_MID       3.975f
-
-        // Convert to a voltage value (we use a voltage divider on this pin)
-        float voltage = ( ( ((float)raw_voltage / 4095.0f) *  3.3f ) * 2.0f ) + VOLTAGE_MEASURE_OFFSET;
-
-        // ESP_LOGI("VOUT:", "Voltage: %f", voltage);
-
-        uint8_t bat_lvl = 0;
-        static bool critical = false;
-        static bool critical_sent = false;
-
-        if(voltage <= VOLTAGE_LEVEL_CRITICAL)
-        {
-            critical = true;
-            bat_lvl = 1;
-        }
-        else if(voltage <= VOLTAGE_LEVEL_LOW)
-        {
-            bat_lvl = 1;
-        }
-        else if(voltage <= VOLTAGE_LEVEL_MID)
-        {
-            bat_lvl = 2;
-        }
-        else 
-        {
-            bat_lvl = 4;
+        if (sync_prev_high && !level_high) {
+            sync_t0 = now;
+            sync_fire = false;
+            ESP_LOGI(TAG, "SYNC pressed (active low)");
         }
 
-        global_live_data.bat_status.bat_lvl = bat_lvl;
-
-        if(critical && !critical_sent)
-        {
-            app_set_power_setting(POWER_CODE_CRITICAL);
-            critical_sent = true;
-            return false;
+        if (!sync_prev_high && level_high) {
+            sync_t0 = 0;
+            sync_fire = false;
+            ESP_LOGI(TAG, "SYNC released");
+            gpio_set_level(HEART_BEAT_BLUE, HIGH);
         }
-    }
 
-    return true;
-}
-
-bool app_enable_internal_adc(uint8_t gpio)
-{
-    if(!_internal_adc_active)
-    {
-        ESP_ERROR_CHECK(adc_oneshot_io_to_channel(gpio, &_adc1, &_internal_adc_channel));
-        ESP_ERROR_CHECK(adc_oneshot_new_unit(&_adc_init_config1, &_adc1_handle));
-        adc_oneshot_chan_cfg_t config = {
-            .atten = ADC_ATTEN_DB_12,
-            .bitwidth = ADC_BITWIDTH_DEFAULT,
-        };
-
-        ESP_ERROR_CHECK(adc_oneshot_config_channel(_adc1_handle, _internal_adc_channel, &config));
-    }
-
-    _internal_adc_active = true;
-
-    // Perform first read and conversion
-    return app_process_internal_adc();
-}
-
-
-
-// Handle incoming input data
-// and call our input callback
-void bt_device_input(uint8_t* data, bool motion)
-{
-    static i2cinput_input_s input_data = {0};
-    static imu_data_s _new_imu = {0};
-
-    uint8_t crc = data[1];
-    bool crc_valid = false;
-
-    crc_valid = crc8_verify(&(data[3]), sizeof(i2cinput_input_s)-1, crc); // Subtract 1 for legacy firmware support
-    if(!crc_valid) return;
-
-    _current_rx_packet_num = data[2];
-
-    memcpy(&input_data, &(data[3]), sizeof(i2cinput_input_s));
-
-    if(_internal_adc_active)
-    {
-        bat_status_u s = {
-            .bat_lvl    = 4,
-            .charging   = 0,
-            .connection = 0
-        };
-
-        s.val = input_data.power_stat;
-
-        global_live_data.bat_status.charging = s.charging;
-    }
-    else 
-    {
-        global_live_data.bat_status.val = input_data.power_stat;
-    }
-
-    _new_imu.ax = input_data.ax;
-    _new_imu.ay = input_data.ay;
-    _new_imu.az = input_data.az;
-    _new_imu.gx = input_data.gx;
-    _new_imu.gy = input_data.gy;
-    _new_imu.gz = input_data.gz;
-    imu_fifo_push(&_new_imu);
-
-    if (!_bluetooth_input_cb)
-    return;
-
-    _bluetooth_input_cb(&input_data);
-}
-
-void i2c_handle_new_tx()
-{
-    static uint8_t *rb_buffer = NULL;
-    static uint8_t rb_buffer_tmp[I2C_TX_BUFFER_SIZE] = {0};
-    static bool get_next_packet = true;
-    static bool confirmed_packet_sent = false;
-
-    if(get_next_packet)
-    {
-        // Try to get the next buffer in line
-        //printf("get next tx buffer\n");
-        rb_buffer = ringbuffer_get(&_status_ringbuffer);
-
-        if(rb_buffer!=NULL)
-        {  
-            memcpy(rb_buffer_tmp, rb_buffer, I2C_TX_BUFFER_SIZE);
-            _current_tx_packet_num = rb_buffer_tmp[I2C_TX_COUNTER_IDX];
-            get_next_packet = false;
-            confirmed_packet_sent = false;
+        if (!level_high && sync_t0 && !sync_fire) {
+            static bool blink = false; blink = !blink;
+            gpio_set_level(HEART_BEAT_BLUE, blink ? LOW : HIGH);
         }
-    }
-    else if(!confirmed_packet_sent && !get_next_packet)
-    {
-        if ( _current_rx_packet_num == rb_buffer_tmp[I2C_TX_COUNTER_IDX] ) // This confirms it's okay to load the next ringbuffer status
-        {
-            //printf("TX Confirmed received\n");
-            confirmed_packet_sent = true;
-            get_next_packet = true;
-        }
-    }
 
-    // Send our curent valid packet as many times as we need until we have a valid response
-    if (!get_next_packet && !confirmed_packet_sent)
-    {
-        memcpy(_i2c_buffer_out, rb_buffer_tmp, I2C_TX_BUFFER_SIZE);
-        mi2c_slave_polling_write(_i2c_buffer_out, I2C_TX_BUFFER_SIZE, pdMS_TO_TICKS(32));
+        if (!level_high && sync_t0 && (now - sync_t0) / 1000 >= LONG_MS &&
+            !sync_fire && uptime_ms >= ARM_MS && seen_rel) {
+            sync_fire = true;
+            ESP_LOGW(TAG, "SYNC long-press — clearing pairing...");
+            for (int i = 0; i < 6; i++) {
+                gpio_set_level(HEART_BEAT_RED, LOW);
+                gpio_set_level(HEART_BEAT_BLUE, HIGH);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                gpio_set_level(HEART_BEAT_RED, HIGH);
+                gpio_set_level(HEART_BEAT_BLUE, LOW);
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+            restart_bluetooth_pairing();
+        }
+        sync_prev_high = level_high;
+		
+		// ------------------------------N64 Mapping to Switch-------------------------------
+		input.button_east      = !gpio_get_level(GPIO_BTN_A);
+		input.button_south     = !gpio_get_level(GPIO_BTN_B);
+		
+		input.dpad_up    = !gpio_get_level(GPIO_BTN_DPAD_U);
+		input.dpad_down  = !gpio_get_level(GPIO_BTN_DPAD_D);
+		input.dpad_left  = !gpio_get_level(GPIO_BTN_DPAD_L);
+		input.dpad_right = !gpio_get_level(GPIO_BTN_DPAD_R);
+
+		input.button_north = !gpio_get_level(GPIO_BTN_C_L);  // VB C-Left → Switch Y
+		input.button_west = !gpio_get_level(GPIO_BTN_C_U);  // VB C-Up   → Switch X
+		input.trigger_zr   = !gpio_get_level(GPIO_BTN_C_D);  // VB C-Down → Switch B
+		input.button_minus = !gpio_get_level(GPIO_BTN_C_R);  // VB C-Right→ Switch A
+
+
+		input.trigger_l   	= !gpio_get_level(GPIO_BTN_L); 
+		input.trigger_r     = !gpio_get_level(GPIO_BTN_R);
+
+		input.button_plus   = !gpio_get_level(GPIO_BTN_START); 
+		//input.button_minus  = !gpio_get_level(GPIO_BTN_SELECT);
+
+		// --- Center analog sticks (no movement yet) ---
+		input.lx = 0x7FFF;
+		input.ly = 0x7FFF;
+		input.rx = 0x7FFF;
+		input.ry = 0x7FFF; 
+
+		// --- Push to Bluetooth HID ---
+		switch_bt_sendinput(&input);
+
+        vTaskDelay(pdMS_TO_TICKS(8));  // ~125Hz update rate
     }
 }
 
-// Handle startup of bluetooth device
-void bt_device_start(uint8_t *data)
-{
-    esp_log_buffer_hex("DUMP", data, 8);
-    const char *TAG = "BT DEVICE START";
-    
-    uint8_t crc = data[1];
 
-    bool crc_pass = crc8_verify(&(data[2]), I2C_START_CMD_CRC_LEN, crc);
-    if(!crc_pass)
-    {
-        printf("CRC Startup FAIL\n");
-        return;
-    }
+// --------------------------------------------------------------------------
+// HOJA CALLBACK STUBS
+// --------------------------------------------------------------------------
+void app_set_connected_status(uint8_t s){ bt_connected=(s!=0); bt_pairing=!bt_connected; bt_error=false; }
+void app_set_standard_haptic(uint8_t l,uint8_t r){ (void)l; (void)r; }
+void app_set_sinput_haptic(uint8_t*d,uint8_t l){ (void)d; (void)l; }
+void app_set_switch_haptic(uint8_t*d){ (void)d; }
+void app_set_power_setting(i2c_power_code_t p){ (void)p; }
+void app_save_host_mac(input_mode_t m,uint8_t*a){ (void)m; memcpy(global_loaded_settings.paired_host_switch_mac,a,6); }
+bool app_compare_mac(uint8_t*a,uint8_t*b){ return memcmp(a,b,6)==0; }
 
-    input_mode_t mode = data[2] & 0x7F;
+uint64_t get_timestamp_ms(void){ return esp_timer_get_time()/1000ULL; }
+uint64_t get_timestamp_us(void){ return esp_timer_get_time(); }
+uint32_t get_timer_value(void){ return (uint32_t)esp_timer_get_time(); }
 
-    bool enable_internal_adc = data[3] > 0 ? true : false;
-    uint8_t internal_adc_gpio= data[4];
+void app_set_report_timer(uint64_t t){ _app_report_timer_us_default=t; if(!_sniff)_app_report_timer_us=_app_report_timer_us_default; }
+uint64_t app_get_report_timer(void){ return _app_report_timer_us; }
 
-    if(enable_internal_adc)
-    {
-        bool adc_init_stat = app_enable_internal_adc(internal_adc_gpio);
-
-        if(!adc_init_stat)
-        {
-            printf("ADC Init FAIL\n");
-            return;
-        }
-    }
-
-    global_live_data.rgb_gripl[0] = data[5];
-    global_live_data.rgb_gripl[1] = data[6];
-    global_live_data.rgb_gripl[2] = data[7];
-
-    global_live_data.rgb_gripr[0] = data[8];
-    global_live_data.rgb_gripr[1] = data[9];
-    global_live_data.rgb_gripr[2] = data[10];
-
-    global_live_data.rgb_body[0] = data[11];
-    global_live_data.rgb_body[1] = data[12];
-    global_live_data.rgb_body[2] = data[13];
-
-    global_live_data.rgb_buttons[0] = data[14];
-    global_live_data.rgb_buttons[1] = data[15];
-    global_live_data.rgb_buttons[2] = data[16];
-
-    // Load PID/VID
-    global_live_data.vendor_id  = (data[17] << 8) | data[18];
-    global_live_data.product_id = (data[19] << 8) | data[20];
-
-    // Sub-ID
-    global_live_data.sub_id = data[21];
-
-    global_live_data.current_mac[0] = data[22];
-    global_live_data.current_mac[1] = data[23];
-    global_live_data.current_mac[2] = data[24];
-    global_live_data.current_mac[3] = data[25];
-    global_live_data.current_mac[4] = data[26];
-    global_live_data.current_mac[5] = data[27];
-
-    // Check if we should clear our addresses
-    // to initiate a new pairing sequence
-    if(data[2] & 0x80)
-    {
-        switch(mode)
-        {
-            default:
-            case INPUT_MODE_SWPRO:
-                memset(&global_loaded_settings.paired_host_switch_mac, 0, 6);
-                generate_random_mac(global_loaded_settings.device_mac_switch);
-            break;
-
-            case INPUT_MODE_SINPUT:
-                memset(&global_loaded_settings.paired_host_sinput_mac, 0, 6);
-                generate_random_mac(global_loaded_settings.device_mac_sinput);
-            break;
-        }
-
-        app_settings_save();
-    }
-
-    switch (mode)
-    {
-    default:
-        break;
-
-    case INPUT_MODE_SWPRO:
-        _bluetooth_input_cb = switch_bt_sendinput;
-        ESP_LOGI(TAG, "Switch BT Mode Init...");
-
-        core_bt_switch_start();
-        break;
-
-    case INPUT_MODE_SINPUT:
-        _bluetooth_input_cb = sinput_bt_sendinput;
-        ESP_LOGI(TAG, "SInput BT Mode Init...");
-        core_bt_sinput_start();
-        break;
-    }
-}
-
-// Return current FW version
-void bt_device_return_fw_version()
-{
-    uint8_t tmp_out[I2C_TX_BUFFER_SIZE] = {0};
-    tmp_out[0] = I2C_STATUS_FIRMWARE_VERSION;
-    tmp_out[1] = HOJA_BASEBAND_VERSION >> 8;
-    tmp_out[2] = HOJA_BASEBAND_VERSION & 0xFF;
-
-    // Generate random seed
-    //firmware_status.rand_seed = 0;
-    //firmware_status.crc = 0;
-
-    // Instant transmit
-    mi2c_slave_polling_write(tmp_out, I2C_TX_BUFFER_SIZE, pdMS_TO_TICKS(1000));
-}
-
+// --------------------------------------------------------------------------
+// APP MAIN
+// --------------------------------------------------------------------------
 void app_main(void)
 {
-    esp_task_wdt_deinit();
+    ESP_LOGI(TAG,"System start");
 
-    const char *TAG = "app_main";
-    esp_err_t ret;
-
-    ESP_LOGI(TAG, "Bluetooth FW starting...");
-
-    // Create mutex
-    main_receive_queue = xQueueCreate(32, sizeof(packed_i2c_msg));
-
-    // NVS Storage Load
-    {
-        // Load settings or create
-        nvs_handle_t my_handle;
-
-        // Initialize flash storage
-        ret = nvs_flash_init();
-        if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
-        {
-            ESP_ERROR_CHECK(nvs_flash_erase());
-            ret = nvs_flash_init();
-        }
-        ESP_ERROR_CHECK(ret);
-
-        ret = nvs_open(HOJA_SETTINGS_NAMESPACE, NVS_READWRITE, &my_handle);
-        if(ret != ESP_OK)
-        {
-            ESP_LOGE(TAG, "During HOJA load settings, NVS Open failed.");
-            return;
-        }
-
-        size_t required_size = 0;
-        ret = nvs_get_blob(my_handle, "hoja_settings", NULL, &required_size);
-        if(required_size>0)
-        {
-            ret = nvs_get_blob(my_handle, "hoja_settings", &global_loaded_settings, &required_size);
-            if(global_loaded_settings.magic != HOJA_MAGIC_NUM)
-            {
-                settings_default();
-                nvs_set_blob(my_handle, "hoja_settings", &global_loaded_settings, sizeof(hoja_settings_s));
-                nvs_commit(my_handle);
-                nvs_close(my_handle);
-                ESP_LOGI(TAG, "HOJA config set to default OK.");
-            }
-            else
-            {
-                ESP_LOGI(TAG, "HOJA config loaded OK.");
-                nvs_close(my_handle);
-            }
-        }
-        else
-        {
-            settings_default();
-            nvs_set_blob(my_handle, "hoja_settings", &global_loaded_settings, sizeof(hoja_settings_s));
-            nvs_commit(my_handle);
-            nvs_close(my_handle);
-            ESP_LOGI(TAG, "HOJA config set to default OK.");
-        }
+    esp_err_t ret=nvs_flash_init();
+    if(ret==ESP_ERR_NVS_NO_FREE_PAGES||ret==ESP_ERR_NVS_NEW_VERSION_FOUND){
+        nvs_flash_erase();
+        nvs_flash_init();
     }
 
-    // Set up I2C slave device with custom driver
-    mi2c_slave_setup();
+    app_settings_load();
+    gpio_input_init();
 
-    // Main I2C loop
-    for (;;)
-    {   
-        // Unload any and all pending messages
-        ringbuffer_unload_threadsafe();
+    //sanitize_mac(global_loaded_settings.device_mac_switch);
+    ESP_LOGI(TAG,"Pre-BT global_live_data.current_mac %02X:%02X:%02X:%02X:%02X:%02X",
+             global_loaded_settings.device_mac_switch[0],
+             global_loaded_settings.device_mac_switch[1],
+             global_loaded_settings.device_mac_switch[2],
+             global_loaded_settings.device_mac_switch[3],
+             global_loaded_settings.device_mac_switch[4],
+             global_loaded_settings.device_mac_switch[5]);
 
-        //printf("i2c RX read attempt\n");
-        mi2c_status_t read_status = mi2c_slave_polling_read(_i2c_buffer_in, I2C_RX_BUFFER_SIZE, 8);
+    ESP_LOGI(TAG, "Switch BT Mode Init...");
+    core_bt_switch_start();
 
-        if (read_status == MI2C_OK)
-        {
-            //printf("I2C RX OK\n");
-            // Check command type
-            switch (_i2c_buffer_in[0])
-            {
-            default:
-                ESP_LOGI(TAG, "Unknown RX");
-                break;
+    // ------------------------------------------------------------------
+    // 🔧 Added: MAC fallback verification & refresh
+    // ------------------------------------------------------------------
+    esp_read_mac(global_live_data.current_mac, ESP_MAC_BT);
+    ESP_LOGI(TAG,"Refreshed BT MAC after core start: %02X:%02X:%02X:%02X:%02X:%02X",
+             global_live_data.current_mac[0],
+             global_live_data.current_mac[1],
+             global_live_data.current_mac[2],
+             global_live_data.current_mac[3],
+             global_live_data.current_mac[4],
+             global_live_data.current_mac[5]);
 
-            case I2C_CMD_STANDARD:
-                //printf("I2C standard OK\n");
-                // Say we're OK to send haptic data
-                haptic_buffer_connected = true;
-                // ESP_LOGI(TAG, "Input RX");
-                bt_device_input(_i2c_buffer_in, false);
-                // Transmit
-                i2c_handle_new_tx();
-                break;
-
-            case I2C_CMD_START:
-                ESP_LOGI(TAG, "Start System RX");
-                bt_device_start(_i2c_buffer_in);
-                // We do not transmit anything with this command
-                break;
-
-            case I2C_CMD_FIRMWARE_VERSION:
-                ESP_LOGI(TAG, "Firmware Version Request RX");
-                bt_device_return_fw_version();
-                break;
-            }   
+    bool mac_zero = true;
+    for (int i = 0; i < 6; i++) {
+        if (global_live_data.current_mac[i] != 0x00) {
+            mac_zero = false;
+            break;
         }
-        else
-        {
-
-        }
-        vTaskDelay(1/portTICK_PERIOD_MS);
-        app_process_internal_adc();
     }
+    if (mac_zero) {
+        ESP_LOGW(TAG, "MAC still zero — refreshing from hardware again");
+        esp_read_mac(global_live_data.current_mac, ESP_MAC_BT);
+        ESP_LOGI(TAG, "Final MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                 global_live_data.current_mac[0],
+                 global_live_data.current_mac[1],
+                 global_live_data.current_mac[2],
+                 global_live_data.current_mac[3],
+                 global_live_data.current_mac[4],
+                 global_live_data.current_mac[5]);
+    }
+    // ------------------------------------------------------------------
+
+    bt_pairing=true;
+
+    xTaskCreatePinnedToCore(heartbeat_task,"heartbeat_task",2048,NULL,1,NULL,0);
+    xTaskCreatePinnedToCore(controller_task,"controller_task",4096,NULL,1,NULL,1);
 }

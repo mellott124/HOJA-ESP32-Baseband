@@ -30,21 +30,18 @@ void ns_report_settimer(uint8_t *buffer)
 
   time = get_timestamp_ms();
 
-  buffer[0] = (uint8_t) (time % 0xFF);
+  buffer[1] = (uint8_t) (time % 0xFF);
 }
 
 void ns_report_setbattconn(uint8_t *buffer)
 {
-  bat_status_u s = {
-    .bat_lvl    = 4,
-    .charging   = 0,
-    .connection = 0
-  };
+    uint8_t battery_level = 8;  // 0–8
+    uint8_t charging = 0;       // 1 if charging
+    uint8_t connection = 1;     // 1 = Bluetooth
 
-  s.val = global_live_data.bat_status.val;
-
-  buffer[1] = s.val;
+    buffer[2] = (battery_level << 4) | (charging << 3) | connection;
 }
+
 
 void ns_report_sub_setdevinfo(uint8_t *buffer)
 {
@@ -52,8 +49,8 @@ void ns_report_sub_setdevinfo(uint8_t *buffer)
   _switch_input_buffer[14] = 0x04; // NS Firmware primary   (4.x)
   _switch_input_buffer[15] = 0x33; // NS Firmware secondary (x.21)
 
-  // buffer[14] = 0x03; // NS Firmware primary   (3.x)
-  // buffer[15] = 0x80; // NS Firmware secondary (x.72)
+   //buffer[14] = 0x03; // NS Firmware primary   (3.x)
+   //buffer[15] = 0x80; // NS Firmware secondary (x.72)
 
   // Procon   - 0x03, 0x02
   // N64      - 0x0C, 0x11
@@ -61,8 +58,8 @@ void ns_report_sub_setdevinfo(uint8_t *buffer)
   // Famicom  - 0x07, 0x02
   // NES      - 0x09, 0x02
   // Genesis  - 0x0D, 0x02
-  buffer[16] = 0x03; // Controller ID primary (Pro Controller)
-  buffer[17] = 0x02; // Controller ID secondary
+  buffer[16] = 0x0C; // Controller ID primary (Pro Controller)
+  buffer[17] = 0x11; // Controller ID secondary
 
   /*_switch_input_buffer[18-23] = MAC ADDRESS;*/
   buffer[18] = global_live_data.current_mac[0];

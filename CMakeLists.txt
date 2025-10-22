@@ -8,3 +8,4 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 include_directories(/main/include)
 
 project(ESP32)
+

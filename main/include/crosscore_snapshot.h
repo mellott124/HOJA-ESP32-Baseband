@@ -21,7 +21,8 @@ static inline void snapshot_##name##_write(snapshot_##name##_t *s, const type *s
 }                                                                    \
                                                                      \
 static inline bool snapshot_##name##_read(snapshot_##name##_t *s, type *dst) { \
-    unsigned int s1, s2;                                             \
+    unsigned int s1=0;                                                  \
+	unsigned int s2=0;                                             \
     do {                                                             \
         s1 = atomic_load_explicit(&s->seq, memory_order_acquire);    \
         if (s1 & 1) continue; /* writer in progress */               \

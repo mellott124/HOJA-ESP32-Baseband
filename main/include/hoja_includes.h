@@ -42,10 +42,6 @@
 #include "esp_err.h"
 
 #include "soc/i2c_struct.h"
-//#include "driver/i2c.h"
-#include "mitch_i2c.h"
-//#include "driver/i2c_slave.h" BAD
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -135,8 +131,6 @@ typedef struct
 
     uint8_t power_stat;
 } __attribute__ ((packed)) i2cinput_input_s;
-
-#define I2CINPUT_INPUT_SIZE sizeof(i2cinput_input_s)
 
 #include "hoja.h"
 
