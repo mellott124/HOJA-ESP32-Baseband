@@ -153,8 +153,8 @@ void ns_report_setinputreport_full(uint8_t *buffer)
 	buffer[4] = _switch_input_data.left_buttons;
 
     // --- Left stick (12-bit packed: X/Y) ---
-    uint16_t lx = _switch_input_data.lx & 0x0FFF;
-    uint16_t ly = _switch_input_data.ly & 0x0FFF;
+    uint16_t lx = _switch_input_data.ls_x & 0x0FFF;
+    uint16_t ly = _switch_input_data.ls_y & 0x0FFF;
 
     // Left stick: bytes 6–8
     buffer[5]  = lx & 0xFF;
@@ -162,8 +162,8 @@ void ns_report_setinputreport_full(uint8_t *buffer)
     buffer[7]  = (ly >> 4) & 0xFF;
 
 	// --- Right stick (12-bit packed: X/Y) ---
-	uint16_t rx = _switch_input_data.rx & 0x0FFF;
-    uint16_t ry = _switch_input_data.ry & 0x0FFF;
+	uint16_t rx = _switch_input_data.rs_x & 0x0FFF;
+    uint16_t ry = _switch_input_data.rs_y & 0x0FFF;
 	
     // Right stick: bytes 9–11
     buffer[8]  = rx & 0xFF;

@@ -45,3 +45,4 @@ build/log/
 
 build/.cmake/
 main/include/new 1.c
+main/core_bt_switch.c_orig
