@@ -217,6 +217,9 @@ static void restart_bluetooth_pairing(void)
 // --------------------------------------------------------------------------
 // CONTROLLER INPUT TASK (reads GPIO + handles SYNC button + LEDs)
 // --------------------------------------------------------------------------
+// --------------------------------------------------------------------------
+// CONTROLLER INPUT TASK (reads GPIO + handles SYNC button + LEDs)
+// --------------------------------------------------------------------------
 static void controller_task(void* arg)
 {
     bool sync_prev_high = true;
@@ -270,41 +273,64 @@ static void controller_task(void* arg)
             restart_bluetooth_pairing();
         }
         sync_prev_high = level_high;
-		
-		// ------------------------------N64 Mapping to Switch-------------------------------
-		input.button_east      = !gpio_get_level(GPIO_BTN_A);
-		input.button_south     = !gpio_get_level(GPIO_BTN_B);
-		
-		input.dpad_up    = !gpio_get_level(GPIO_BTN_DPAD_U);
-		input.dpad_down  = !gpio_get_level(GPIO_BTN_DPAD_D);
-		input.dpad_left  = !gpio_get_level(GPIO_BTN_DPAD_L);
-		input.dpad_right = !gpio_get_level(GPIO_BTN_DPAD_R);
 
-		input.button_north = !gpio_get_level(GPIO_BTN_C_L);  // VB C-Left → Switch Y
-		input.button_west = !gpio_get_level(GPIO_BTN_C_U);  // VB C-Up   → Switch X
-		input.trigger_zr   = !gpio_get_level(GPIO_BTN_C_D);  // VB C-Down → Switch B
-		input.button_minus = !gpio_get_level(GPIO_BTN_C_R);  // VB C-Right→ Switch A
+        // ------------------------------------------------------------------
+        // MAIN CONTROLLER BUTTON READS
+        // ------------------------------------------------------------------
+        input.button_east      = !gpio_get_level(GPIO_BTN_A);     // VB A  → Switch A
+        input.button_south     = !gpio_get_level(GPIO_BTN_B);     // VB B  → Switch B
 
+        input.dpad_up          = !gpio_get_level(GPIO_BTN_DPAD_U);
+        input.dpad_down        = !gpio_get_level(GPIO_BTN_DPAD_D);
+        input.dpad_left        = !gpio_get_level(GPIO_BTN_DPAD_L);
+        input.dpad_right       = !gpio_get_level(GPIO_BTN_DPAD_R);
 
-		input.trigger_l   	= !gpio_get_level(GPIO_BTN_L); 
-		input.trigger_r     = !gpio_get_level(GPIO_BTN_R);
+        input.button_north     = !gpio_get_level(GPIO_BTN_C_L);   // VB C-Left  → Switch Y
+        input.button_west      = !gpio_get_level(GPIO_BTN_C_U);   // VB C-Up    → Switch X
+        input.button_minus     = !gpio_get_level(GPIO_BTN_C_R);   // VB C-Right → Switch Minus
+        input.trigger_zr       = !gpio_get_level(GPIO_BTN_C_D);   // VB C-Down  → Switch ZR
 
-		input.button_plus   = !gpio_get_level(GPIO_BTN_START); 
-		//input.button_minus  = !gpio_get_level(GPIO_BTN_SELECT);
+        input.trigger_l        = !gpio_get_level(GPIO_BTN_L);
+        input.trigger_r        = !gpio_get_level(GPIO_BTN_R);
+        input.button_plus      = !gpio_get_level(GPIO_BTN_START); // VB Start   → Switch Plus
+        // VB Select handled below
 
-		// --- Center analog sticks (no movement yet) ---
-		input.lx = 0x7FFF;
-		input.ly = 0x7FFF;
-		input.rx = 0x7FFF;
-		input.ry = 0x7FFF; 
+        // --- Center analog sticks (no movement yet) ---
+        input.lx = 0x7FFF;
+        input.ly = 0x7FFF;
+        input.rx = 0x7FFF;
+        input.ry = 0x7FFF;
 
-		// --- Push to Bluetooth HID ---
-		switch_bt_sendinput(&input);
+        // ------------------------------------------------------------------
+        // SELECT BUTTON + MODIFIER COMBOS
+        // ------------------------------------------------------------------
+        bool sel    = !gpio_get_level(GPIO_BTN_SELECT);
+        bool trig_l = !gpio_get_level(GPIO_BTN_L);
+        bool trig_r = !gpio_get_level(GPIO_BTN_R);
 
-        vTaskDelay(pdMS_TO_TICKS(8));  // ~125Hz update rate
+        input.button_capture   = false;
+        input.button_home      = false;
+        input.button_stick_left  = false;
+        input.button_stick_right = false;
+
+        if (sel && !trig_l && !trig_r) {
+            input.button_capture = true;      // Select → Capture
+        }
+        if (sel && trig_l) {
+            input.button_home = true;         // Select + L → Home
+        }
+        if (sel && trig_r) {
+            input.button_stick_left = true;   // Select + R → L-stick click
+        }
+
+        // ------------------------------------------------------------------
+        // SEND INPUT DATA TO SWITCH
+        // ------------------------------------------------------------------
+        switch_bt_sendinput(&input);
+
+        vTaskDelay(pdMS_TO_TICKS(8));  // ~125 Hz update rate
     }
 }
-
 
 // --------------------------------------------------------------------------
 // HOJA CALLBACK STUBS

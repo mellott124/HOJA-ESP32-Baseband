@@ -129,173 +129,54 @@ void ns_set_imu_mode(uint8_t mode)
     _switch_imu_mode = mode;
 }
 
-/* void ns_report_setinputreport_full(uint8_t *buffer)
-{
-    // --- Report ID and timer ---
-    static uint8_t timer = 0;
-    //buffer[0] = 0x30;          // Report ID
-    buffer[0] = timer++;
-    buffer[1] = 0x8E;          // Battery full + connected
-
-    // --- Buttons (from _switch_input_data) ---
-    // Use the struct’s packed bytes directly
-	buffer[2] = _switch_input_data.right_buttons;   // Y,X,B,A,SR,SL,R,ZR (bit0..7)
-	buffer[3] = _switch_input_data.shared_buttons;  // -, +, SB_R, SB_L, Home, Capture, ..., Grip
-	buffer[4] = _switch_input_data.left_buttons;    // Ddn, Dup, Dright, Dleft, L_SR, L_SL, L, ZL
-
-
-    // --- Left stick (12-bit packed: X/Y) ---
-    uint16_t lx = _switch_input_data.ls_x & 0x0FFF;
-    uint16_t ly = _switch_input_data.ls_y & 0x0FFF;
-
-    buffer[5]  = lx & 0xFF;
-    buffer[6]  = ((ly & 0x0F) << 4) | ((lx >> 8) & 0x0F);
-    buffer[7]  = (ly >> 4) & 0xFF;
-
-    // --- Right stick (12-bit packed: X/Y) ---
-    uint16_t rx = _switch_input_data.rs_x & 0x0FFF;
-    uint16_t ry = _switch_input_data.rs_y & 0x0FFF;
-
-    buffer[8]  = rx & 0xFF;
-    buffer[9] = ((ry & 0x0F) << 4) | ((rx >> 8) & 0x0F);
-    buffer[10] = (ry >> 4) & 0xFF;
-
-    // --- Fill remaining bytes with 0 ---
-    for (int i = 11; i < 49; i++) {
-        buffer[i] = 0x00;
-    }
-} */
-
-
 void ns_report_setinputreport_full(uint8_t *buffer)
 {
-    // Nintendo Switch expects 49 bytes total
+    // Nintendo Switch expects 48 bytes total
     // 0x30 = Input report ID
-    //buffer[1] = 0x30;
+    //buffer[1] = 0x30; //This is handled by later function calls
 
-    // Byte[1]: timer (increments every frame)
+    // Byte[0]: timer (increments every frame)
     static uint8_t timer = 0;
     buffer[0] = timer++;
     
-    // Byte[2]: battery + connection
+    // Byte[1]: battery + connection
     // 0x8E = full battery, connected via Bluetooth
     buffer[1] = 0x8E;
 
-    // Bytes[3–5]: button data
+    // Bytes[2–4]: button data
     // bit order:
-    //   byte3: A/B/X/Y/R/ZR/L/ZL
-    //   byte4: Minus/Plus/RS/LS/Home/Capture
-    //   byte5: D-pad + bits
+    //   byte2: A/B/X/Y/R/ZR/L/ZL
+    //   byte3: Minus/Plus/RS/LS/Home/Capture
+    //   byte4: D-pad + bits
     buffer[2] = _switch_input_data.right_buttons;
 	buffer[3] = _switch_input_data.shared_buttons;
 	buffer[4] = _switch_input_data.left_buttons;
 
-    // Stick centers (0x07FF)
-    uint16_t lx = 0x07FF;
-    uint16_t ly = 0x07FF;
-    uint16_t rx = 0x07FF;
-    uint16_t ry = 0x07FF;
+    // --- Left stick (12-bit packed: X/Y) ---
+    uint16_t lx = _switch_input_data.lx & 0x0FFF;
+    uint16_t ly = _switch_input_data.ly & 0x0FFF;
 
     // Left stick: bytes 6–8
     buffer[5]  = lx & 0xFF;
     buffer[6]  = ((ly & 0x0F) << 4) | ((lx >> 8) & 0x0F);
     buffer[7]  = (ly >> 4) & 0xFF;
 
+	// --- Right stick (12-bit packed: X/Y) ---
+	uint16_t rx = _switch_input_data.rx & 0x0FFF;
+    uint16_t ry = _switch_input_data.ry & 0x0FFF;
+	
     // Right stick: bytes 9–11
     buffer[8]  = rx & 0xFF;
     buffer[9] = ((ry & 0x0F) << 4) | ((rx >> 8) & 0x0F);
     buffer[10] = (ry >> 4) & 0xFF;
 
-    // Fill remaining 12–48 with zeros (rumble, subcmd replies, etc.)
+    // Fill remaining bytes with zeros (rumble, subcmd replies, etc.)
     for (int i = 11; i < 48; i++) {
         buffer[i] = 0x00;
     }
 }
 
-/* 
-void ns_report_setinputreport_full(uint8_t *buffer)
-{
-  //Set input data
-  buffer[2] = _switch_input_data.right_buttons;
-  buffer[3] = _switch_input_data.shared_buttons;
-  buffer[4] = _switch_input_data.left_buttons;
 
-  //Set sticks directly
-  //Saves cycles :)
-  buffer[5] = (_switch_input_data.ls_x & 0xFF);
-  buffer[6] = (_switch_input_data.ls_x & 0xF00) >> 8;
-  //ns_input_report[7] |= (g_stick_data.lsy & 0xF) << 4;
-  buffer[7] = (_switch_input_data.ls_y & 0xFF0) >> 4;
-  buffer[8] = (_switch_input_data.rs_x & 0xFF);
-  buffer[9] = (_switch_input_data.rs_x & 0xF00) >> 8;
-  buffer[10] = (_switch_input_data.rs_y & 0xFF0) >> 4;
-
-  if (_switch_imu_mode == 0x01)
-  {
-    //Set gyro
-    //Retrieve and write IMU data
-    static imu_data_s imu = {0};
-    imu_access_safe(&imu);
-
-    //Group 1
-    buffer[12] = imu.ay_8l; // Y-axis
-    buffer[13] = imu.ay_8h;
-    buffer[14] = imu.ax_8l; // X-axis
-    buffer[15] = imu.ax_8h;
-    buffer[16] = imu.az_8l; // Z-axis
-    buffer[17] = imu.az_8h;
-    buffer[18] = imu.gy_8l;
-    buffer[19] = imu.gy_8h;
-    buffer[20] = imu.gx_8l;
-    buffer[21] = imu.gx_8h;
-    buffer[22] = imu.gz_8l;
-    buffer[23] = imu.gz_8h;
-
-    //Group 2
-    memcpy(&buffer[24], &buffer[12], 12);
-    
-  //   buffer[24] = _imu_tmp->ay_8l; // Y-axis
-    buffer[25] = _imu_tmp->ay_8h;
-    buffer[26] = _imu_tmp->ax_8l; // X-axis
-    buffer[27] = _imu_tmp->ax_8h;
-    buffer[28] = _imu_tmp->az_8l; // Z-axis
-    buffer[29] = _imu_tmp->az_8h;
-
-    buffer[30] = _imu_tmp->gy_8l;
-    buffer[31] = _imu_tmp->gy_8h;
-    buffer[32] = _imu_tmp->gx_8l;
-    buffer[33] = _imu_tmp->gx_8h;
-    buffer[34] = _imu_tmp->gz_8l;
-    buffer[35] = _imu_tmp->gz_8h;
-     //
-
-    //Group 3
-    //memcpy(&buffer[36], &buffer[12], 12);
-    
-   //  buffer[36] = _imu_tmp->ay_8l; // Y-axis
-    buffer[37] = _imu_tmp->ay_8h;
-    buffer[38] = _imu_tmp->ax_8l; // X-axis
-    buffer[39] = _imu_tmp->ax_8h;
-    buffer[40] = _imu_tmp->az_8l; // Z-axis
-    buffer[41] = _imu_tmp->az_8h;
-
-    buffer[42] = _imu_tmp->gy_8l;
-    buffer[43] = _imu_tmp->gy_8h;
-    buffer[44] = _imu_tmp->gx_8l;
-    buffer[45] = _imu_tmp->gx_8h;
-    buffer[46] = _imu_tmp->gz_8l;
-    buffer[47] = _imu_tmp->gz_8h; //
-    
-  }
-  else if (_switch_imu_mode == 0x02)
-  {
-    static mode_2_s mode_2_data = {0};
-
-    imu_pack_quat(&mode_2_data);
-
-    memcpy(&(buffer[12]), &mode_2_data, sizeof(mode_2_s));
-  }
-} */
 
 void _ns_reset_report_spacer()
 {
@@ -739,7 +620,7 @@ void _switch_bt_task_standard(void *parameters)
                     }
 #endif
                     if (_hid_connected) {
-						ESP_LOG_BUFFER_HEX("HID_TX_FINAL", _full_buffer, 16);
+						//ESP_LOG_BUFFER_HEX("HID_TX_FINAL", _full_buffer, 16);
                         esp_bt_hid_device_send_report(ESP_HIDD_REPORT_TYPE_INTRDATA, 0x30, SWITCH_BT_REPORT_SIZE, _full_buffer);
                     }
                 }
@@ -790,67 +671,3 @@ void switch_bt_sendinput(i2cinput_input_s *input)
     _switch_input_data.sb_left  = input->button_stick_left;
     _switch_input_data.sb_right = input->button_stick_right;
 }
-
-/* void switch_bt_sendinput(sw_input_s *input)
-{
-    // --- Analog sticks ---
-    _switch_input_data.ls_x = input->ls_x;
-    _switch_input_data.ls_y = input->ls_y;
-    _switch_input_data.rs_x = input->rs_x;
-    _switch_input_data.rs_y = input->rs_y;
-
-    // --- Right-side buttons ---
-    _switch_input_data.b_y    = input->b_y;
-    _switch_input_data.b_x    = input->b_x;
-    _switch_input_data.b_b    = input->b_b;
-    _switch_input_data.b_a    = input->b_a;
-    _switch_input_data.t_r_sr = input->t_r_sr;
-    _switch_input_data.t_r_sl = input->t_r_sl;
-    _switch_input_data.t_r    = input->t_r;
-    _switch_input_data.t_zr   = input->t_zr;
-
-    // --- Shared buttons ---
-    _switch_input_data.b_minus           = input->b_minus;
-    _switch_input_data.b_plus            = input->b_plus;
-    _switch_input_data.sb_right          = input->sb_right;
-    _switch_input_data.sb_left           = input->sb_left;
-    _switch_input_data.b_home            = input->b_home;
-    _switch_input_data.b_capture         = input->b_capture;
-    _switch_input_data.charge_grip_active = input->charge_grip_active;
-
-    // --- Left-side buttons ---
-    _switch_input_data.d_down = input->d_down;
-    _switch_input_data.d_up   = input->d_up;
-    _switch_input_data.d_right = input->d_right;
-    _switch_input_data.d_left  = input->d_left;
-    _switch_input_data.t_l_sr  = input->t_l_sr;
-    _switch_input_data.t_l_sl  = input->t_l_sl;
-    _switch_input_data.t_l     = input->t_l;
-    _switch_input_data.t_zl    = input->t_zl;
-	
-	#if 1
-	static uint8_t last_rb = 0, last_sb = 0, last_lb = 0;
-	uint8_t rb = _switch_input_data.right_buttons;
-	uint8_t sb = _switch_input_data.shared_buttons;
-	uint8_t lb = _switch_input_data.left_buttons;
-
-	if (rb != last_rb || sb != last_sb || lb != last_lb)
-	{
-		ESP_LOGI("BTN", "RB:%02X SB:%02X LB:%02X | A:%d B:%d X:%d Y:%d +:%d -:%d L:%d R:%d ZL:%d ZR:%d U:%d D:%d L:%d R:%d",
-				 rb, sb, lb,
-				 _switch_input_data.b_a, _switch_input_data.b_b,
-				 _switch_input_data.b_x, _switch_input_data.b_y,
-				 _switch_input_data.b_plus, _switch_input_data.b_minus,
-				 _switch_input_data.t_l, _switch_input_data.t_r,
-				 _switch_input_data.t_zl, _switch_input_data.t_zr,
-				 _switch_input_data.d_up, _switch_input_data.d_down,
-				 _switch_input_data.d_left, _switch_input_data.d_right);
-
-		last_rb = rb;
-		last_sb = sb;
-		last_lb = lb;
-	}
-	#endif
-
-
-} */

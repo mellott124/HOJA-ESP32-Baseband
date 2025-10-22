@@ -58,7 +58,7 @@ void ns_report_sub_setdevinfo(uint8_t *buffer)
   // Famicom  - 0x07, 0x02
   // NES      - 0x09, 0x02
   // Genesis  - 0x0D, 0x02
-  buffer[16] = 0x0C; // Controller ID primary (Pro Controller)
+  buffer[16] = 0x0C; // Controller ID primary
   buffer[17] = 0x11; // Controller ID secondary
 
   /*_switch_input_buffer[18-23] = MAC ADDRESS;*/
