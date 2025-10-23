@@ -19,6 +19,7 @@
 #include "esp_gap_bt_api.h"
 #include "hoja_includes.h"
 #include "hoja_types.h"
+#include "LED.h"
 
 #define TAG "MAIN"
 #define HIGH 1
@@ -42,14 +43,6 @@
 #define GPIO_BTN_START      GPIO_NUM_20
 #define GPIO_BTN_SELECT     GPIO_NUM_4
 #define GPIO_BTN_SYNC       GPIO_NUM_2   // active-low SYNC button
-
-// --------------------------------------------------------------------------
-// LED DEFINES (active-low RGB LED)
-// --------------------------------------------------------------------------
-#define HEART_BEAT_RED      GPIO_NUM_26
-#define HEART_BEAT_BLUE     GPIO_NUM_25
-#define HEART_BEAT_GREEN    GPIO_NUM_27
-#define GPIO_OUTPUT_LED_MASK ((1ULL<<HEART_BEAT_RED)|(1ULL<<HEART_BEAT_BLUE)|(1ULL<<HEART_BEAT_GREEN))
 
 // --------------------------------------------------------------------------
 // APP GLOBAL STATE
@@ -145,65 +138,23 @@ static void gpio_input_init(void)
     c.pull_up_en=GPIO_PULLUP_ENABLE;
     gpio_config(&c);
 
-    c.pin_bit_mask=GPIO_OUTPUT_LED_MASK;
-    c.mode=GPIO_MODE_OUTPUT;
-    gpio_config(&c);
-
-    gpio_set_level(HEART_BEAT_RED,LOW);   vTaskDelay(pdMS_TO_TICKS(120));
-    gpio_set_level(HEART_BEAT_RED,HIGH);
-    gpio_set_level(HEART_BEAT_GREEN,LOW); vTaskDelay(pdMS_TO_TICKS(120));
-    gpio_set_level(HEART_BEAT_GREEN,HIGH);
-    gpio_set_level(HEART_BEAT_BLUE,LOW);  vTaskDelay(pdMS_TO_TICKS(120));
-    gpio_set_level(HEART_BEAT_BLUE,HIGH);
-}
-
-// --------------------------------------------------------------------------
-// HEARTBEAT LED TASK
-// --------------------------------------------------------------------------
-static void heartbeat_task(void*arg)
-{
-    while(true){
-        gpio_set_level(HEART_BEAT_RED,HIGH);
-        gpio_set_level(HEART_BEAT_GREEN,HIGH);
-        gpio_set_level(HEART_BEAT_BLUE,HIGH);
-
-        if(bt_error){
-            gpio_set_level(HEART_BEAT_RED,LOW);
-            vTaskDelay(pdMS_TO_TICKS(800));
-            gpio_set_level(HEART_BEAT_RED,HIGH);
-            vTaskDelay(pdMS_TO_TICKS(800));
-        } else if(bt_connected){
-            gpio_set_level(HEART_BEAT_GREEN,LOW);
-            vTaskDelay(pdMS_TO_TICKS(400));
-            gpio_set_level(HEART_BEAT_GREEN,HIGH);
-            vTaskDelay(pdMS_TO_TICKS(400));
-        } else if(bt_pairing){
-            gpio_set_level(HEART_BEAT_BLUE,LOW);
-            vTaskDelay(pdMS_TO_TICKS(400));
-            gpio_set_level(HEART_BEAT_BLUE,HIGH);
-            vTaskDelay(pdMS_TO_TICKS(400));
-        } else {
-            gpio_set_level(HEART_BEAT_BLUE,LOW);
-            vTaskDelay(pdMS_TO_TICKS(150));
-            gpio_set_level(HEART_BEAT_BLUE,HIGH);
-            vTaskDelay(pdMS_TO_TICKS(1250));
-        }
-    }
 }
 
 // --------------------------------------------------------------------------
 // RESTART BLUETOOTH PAIRING
 // --------------------------------------------------------------------------
-static void restart_bluetooth_pairing(void)
+/* static void restart_bluetooth_pairing(void)
 {
-    ESP_LOGW(TAG,"Restarting for pairing...");
-    bt_pairing=true; bt_connected=false; bt_error=false;
+    ESP_LOGW(TAG, "Restarting for pairing (non-destructive)...");
+    bt_pairing = true; 
+    bt_connected = false; 
+    bt_error = false;
 
-    memset(global_loaded_settings.paired_host_switch_mac,0,6);
     esp_read_mac(global_loaded_settings.device_mac_switch, ESP_MAC_BT);
     sanitize_mac(global_loaded_settings.device_mac_switch);
-    app_settings_save();
-    memset(global_live_data.current_mac,0,sizeof(global_live_data.current_mac));
+    memset(global_live_data.current_mac, 0, sizeof(global_live_data.current_mac));
+
+    led_set_state(LED_PAIRING);
 
     esp_bluedroid_disable();
     esp_bluedroid_deinit();
@@ -212,11 +163,25 @@ static void restart_bluetooth_pairing(void)
 
     vTaskDelay(pdMS_TO_TICKS(300));
     esp_restart();
+} */
+
+static void restart_factory_reset(void)
+{
+    ESP_LOGW(TAG, "Factory reset: clearing paired host...");
+    bt_pairing = true; 
+    bt_connected = false; 
+    bt_error = false;
+
+    memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
+    app_settings_save();
+
+    led_set_state(LED_ERROR);  // Red flash for reset
+    vTaskDelay(pdMS_TO_TICKS(400));
+    led_set_state(LED_PAIRING); // Amber after clear
+
+    esp_restart();
 }
 
-// --------------------------------------------------------------------------
-// CONTROLLER INPUT TASK (reads GPIO + handles SYNC button + LEDs)
-// --------------------------------------------------------------------------
 // --------------------------------------------------------------------------
 // CONTROLLER INPUT TASK (reads GPIO + handles SYNC button + LEDs)
 // --------------------------------------------------------------------------
@@ -224,54 +189,50 @@ static void controller_task(void* arg)
 {
     bool sync_prev_high = true;
     int64_t sync_t0 = 0;
-    bool sync_fire = false, seen_rel = false;
-    const int LONG_MS = 2000, ARM_MS = 3000;
-    int64_t boot_t0 = esp_timer_get_time();
 
     ESP_LOGI(TAG, "Monitoring SYNC pin (GPIO%d)", GPIO_BTN_SYNC);
 
     i2cinput_input_s input = {0};
 
+    // Set initial LED to IDLE (slow blue pulse)
+    led_set_state(LED_IDLE);
+
     while (true)
     {
-        // --- Handle SYNC button ---
+        // ------------------------------------------------------------------
+        // SYNC BUTTON — Match Official Nintendo Behavior
+        // ------------------------------------------------------------------
         bool level_high = gpio_get_level(GPIO_BTN_SYNC);
         int64_t now = esp_timer_get_time();
-        int64_t uptime_ms = (now - boot_t0) / 1000;
-        if (level_high) seen_rel = true;
 
+        // Detect press
         if (sync_prev_high && !level_high) {
             sync_t0 = now;
-            sync_fire = false;
             ESP_LOGI(TAG, "SYNC pressed (active low)");
         }
 
+        // Detect release
         if (!sync_prev_high && level_high) {
-            sync_t0 = 0;
-            sync_fire = false;
-            ESP_LOGI(TAG, "SYNC released");
-            gpio_set_level(HEART_BEAT_BLUE, HIGH);
-        }
+            int64_t held_ms = (now - sync_t0) / 1000;
+            ESP_LOGI(TAG, "SYNC released after %lld ms", held_ms);
 
-        if (!level_high && sync_t0 && !sync_fire) {
-            static bool blink = false; blink = !blink;
-            gpio_set_level(HEART_BEAT_BLUE, blink ? LOW : HIGH);
-        }
-
-        if (!level_high && sync_t0 && (now - sync_t0) / 1000 >= LONG_MS &&
-            !sync_fire && uptime_ms >= ARM_MS && seen_rel) {
-            sync_fire = true;
-            ESP_LOGW(TAG, "SYNC long-press — clearing pairing...");
-            for (int i = 0; i < 6; i++) {
-                gpio_set_level(HEART_BEAT_RED, LOW);
-                gpio_set_level(HEART_BEAT_BLUE, HIGH);
-                vTaskDelay(pdMS_TO_TICKS(100));
-                gpio_set_level(HEART_BEAT_RED, HIGH);
-                gpio_set_level(HEART_BEAT_BLUE, LOW);
-                vTaskDelay(pdMS_TO_TICKS(100));
+            if (held_ms >= 2000) {
+                // --- Long press (2+ sec): Factory reset pairing ---
+                ESP_LOGW(TAG, "SYNC long-press — factory reset pairing...");
+                led_set_state(LED_ERROR);
+                vTaskDelay(pdMS_TO_TICKS(200));
+                led_set_state(LED_PAIRING);
+                vTaskDelay(pdMS_TO_TICKS(200));
+                restart_factory_reset();
+            } else {
+                // --- Short press (<2 sec): quick Joy-Con style amber pulse ---
+                ESP_LOGI(TAG, "SYNC short-press — quick amber pulse (no reset)");
+                led_set_state(LED_PAIRING);
+                vTaskDelay(pdMS_TO_TICKS(100));   // fast flash, Joy-Con style
+                led_set_state(LED_IDLE);
             }
-            restart_bluetooth_pairing();
         }
+
         sync_prev_high = level_high;
 
         // ------------------------------------------------------------------
@@ -293,7 +254,6 @@ static void controller_task(void* arg)
         input.trigger_l        = !gpio_get_level(GPIO_BTN_L);
         input.trigger_r        = !gpio_get_level(GPIO_BTN_R);
         input.button_plus      = !gpio_get_level(GPIO_BTN_START); // VB Start   → Switch Plus
-        // VB Select handled below
 
         // --- Center analog sticks (no movement yet) ---
         input.lx = 0x7FFF;
@@ -302,25 +262,38 @@ static void controller_task(void* arg)
         input.ry = 0x7FFF;
 
         // ------------------------------------------------------------------
-        // SELECT BUTTON + MODIFIER COMBOS
+        // SELECT BUTTON + MODIFIER COMBOS (with debounce)
         // ------------------------------------------------------------------
+        static int64_t last_select_press = 0;
+        const int DEBOUNCE_MS = 50;
+
         bool sel    = !gpio_get_level(GPIO_BTN_SELECT);
         bool trig_l = !gpio_get_level(GPIO_BTN_L);
         bool trig_r = !gpio_get_level(GPIO_BTN_R);
 
-        input.button_capture   = false;
-        input.button_home      = false;
+        input.button_capture     = false;
+        input.button_home        = false;
         input.button_stick_left  = false;
         input.button_stick_right = false;
 
-        if (sel && !trig_l && !trig_r) {
-            input.button_capture = true;      // Select → Capture
-        }
-        if (sel && trig_l) {
-            input.button_home = true;         // Select + L → Home
-        }
-        if (sel && trig_r) {
-            input.button_stick_left = true;   // Select + R → L-stick click
+        int64_t now_us = esp_timer_get_time();
+        int64_t elapsed_ms = (now_us - last_select_press) / 1000;
+
+        if (sel && elapsed_ms > DEBOUNCE_MS) {
+            last_select_press = now_us;
+
+            if (trig_l) {
+                input.button_home = true;           // Select + L → Home
+                ESP_LOGI(TAG, "Select+L combo (Home)");
+            } 
+            else if (trig_r) {
+                input.button_stick_left = true;     // Select + R → L-stick click
+                ESP_LOGI(TAG, "Select+R combo (L-Stick)");
+            } 
+            else {
+                input.button_capture = true;        // Select alone → Capture
+                ESP_LOGI(TAG, "Select alone (Capture)");
+            }
         }
 
         // ------------------------------------------------------------------
@@ -332,6 +305,9 @@ static void controller_task(void* arg)
     }
 }
 
+
+
+
 // --------------------------------------------------------------------------
 // HOJA CALLBACK STUBS
 // --------------------------------------------------------------------------
@@ -340,7 +316,25 @@ void app_set_standard_haptic(uint8_t l,uint8_t r){ (void)l; (void)r; }
 void app_set_sinput_haptic(uint8_t*d,uint8_t l){ (void)d; (void)l; }
 void app_set_switch_haptic(uint8_t*d){ (void)d; }
 void app_set_power_setting(i2c_power_code_t p){ (void)p; }
-void app_save_host_mac(input_mode_t m,uint8_t*a){ (void)m; memcpy(global_loaded_settings.paired_host_switch_mac,a,6); }
+void app_save_host_mac(input_mode_t m, uint8_t *a)
+{
+    (void)m;
+
+    // Only save if MAC actually changed (to avoid NVS wear)
+    if (memcmp(global_loaded_settings.paired_host_switch_mac, a, 6) != 0)
+    {
+        memcpy(global_loaded_settings.paired_host_switch_mac, a, 6);
+        app_settings_save();
+        ESP_LOGI("MAIN", "Updated paired host MAC in NVS: %02X:%02X:%02X:%02X:%02X:%02X",
+                 a[0], a[1], a[2], a[3], a[4], a[5]);
+    }
+    else
+    {
+        ESP_LOGI("MAIN", "Paired host MAC unchanged, skipping NVS save.");
+    }
+}
+
+
 bool app_compare_mac(uint8_t*a,uint8_t*b){ return memcmp(a,b,6)==0; }
 
 uint64_t get_timestamp_ms(void){ return esp_timer_get_time()/1000ULL; }
@@ -355,19 +349,32 @@ uint64_t app_get_report_timer(void){ return _app_report_timer_us; }
 // --------------------------------------------------------------------------
 void app_main(void)
 {
-    ESP_LOGI(TAG,"System start");
+    ESP_LOGI(TAG, "System start");
 
-    esp_err_t ret=nvs_flash_init();
-    if(ret==ESP_ERR_NVS_NO_FREE_PAGES||ret==ESP_ERR_NVS_NEW_VERSION_FOUND){
+    // --------------------------------------------------
+    // 🧭 STEP 1: Initialize NVS
+    // --------------------------------------------------
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase();
         nvs_flash_init();
     }
 
+    // --------------------------------------------------
+    // 🟦 STEP 2: Initialize settings, GPIO, and LED early
+    // --------------------------------------------------
     app_settings_load();
     gpio_input_init();
+	led_init();
+	led_boot_sweep(); //Boot animation
+	xTaskCreate(led_task, "led_task", 2048, NULL, 2, NULL);
+	led_set_state(LED_IDLE);
 
-    //sanitize_mac(global_loaded_settings.device_mac_switch);
-    ESP_LOGI(TAG,"Pre-BT global_live_data.current_mac %02X:%02X:%02X:%02X:%02X:%02X",
+
+    // --------------------------------------------------
+    // 🧩 STEP 3: Log and sanitize MAC
+    // --------------------------------------------------
+    ESP_LOGI(TAG, "Pre-BT global_live_data.current_mac %02X:%02X:%02X:%02X:%02X:%02X",
              global_loaded_settings.device_mac_switch[0],
              global_loaded_settings.device_mac_switch[1],
              global_loaded_settings.device_mac_switch[2],
@@ -375,14 +382,24 @@ void app_main(void)
              global_loaded_settings.device_mac_switch[4],
              global_loaded_settings.device_mac_switch[5]);
 
+    // --------------------------------------------------
+    // 🟧 STEP 4: Initialize Bluetooth core
+    // --------------------------------------------------
     ESP_LOGI(TAG, "Switch BT Mode Init...");
-    core_bt_switch_start();
+    int bt_status = core_bt_switch_start();
 
-    // ------------------------------------------------------------------
-    // 🔧 Added: MAC fallback verification & refresh
-    // ------------------------------------------------------------------
+    if (bt_status == 1) {
+        // Now Bluetooth HID stack is active
+        led_set_state(LED_PAIRING);  // 🟠 Amber = advertising/reconnecting
+    } else {
+        led_set_state(LED_ERROR);    // 🔴 Red = failure
+    }
+
+    // --------------------------------------------------
+    // 🧾 STEP 5: Verify MAC post-start
+    // --------------------------------------------------
     esp_read_mac(global_live_data.current_mac, ESP_MAC_BT);
-    ESP_LOGI(TAG,"Refreshed BT MAC after core start: %02X:%02X:%02X:%02X:%02X:%02X",
+    ESP_LOGI(TAG, "Refreshed BT MAC after core start: %02X:%02X:%02X:%02X:%02X:%02X",
              global_live_data.current_mac[0],
              global_live_data.current_mac[1],
              global_live_data.current_mac[2],
@@ -408,10 +425,11 @@ void app_main(void)
                  global_live_data.current_mac[4],
                  global_live_data.current_mac[5]);
     }
-    // ------------------------------------------------------------------
 
-    bt_pairing=true;
-
-    xTaskCreatePinnedToCore(heartbeat_task,"heartbeat_task",2048,NULL,1,NULL,0);
-    xTaskCreatePinnedToCore(controller_task,"controller_task",4096,NULL,1,NULL,1);
+    // --------------------------------------------------
+    // 🕹️ STEP 6: Launch controller input task
+    // --------------------------------------------------
+    bt_pairing = true;  // initial pairing mode (used by LED state machine)
+    xTaskCreatePinnedToCore(controller_task, "controller_task", 4096, NULL, 1, NULL, 1);
 }
+

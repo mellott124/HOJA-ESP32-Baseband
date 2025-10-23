@@ -1,5 +1,11 @@
 #include "core_bt_switch.h"
 #include "esp_log.h"
+#include "driver/gpio.h"   // Needed for gpio_set_level(), GPIO_NUM_xx
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "LED.h"           // Needed for led_all_off(), led_set_state(), LED_IDLE, etc.
+
+
 
 #define HID_PROD_NSPRO  0x2009
 #define HID_VEND_NSPRO  0x057E
@@ -368,7 +374,9 @@ void switch_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
     }
 }
 
-// Callbacks for HID report events
+// --------------------------------------------------------------------------
+// HID Callback: handles connection, disconnection, and state transitions
+// --------------------------------------------------------------------------
 void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, void *event_data)
 {
     esp_hidd_event_t event = (esp_hidd_event_t)id;
@@ -377,87 +385,142 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
 
     switch (event)
     {
+        // --------------------------------------------------------------
+        // HID Start: controller begins advertising or reconnecting
+        // --------------------------------------------------------------
         case ESP_HIDD_START_EVENT:
         {
             if (param->start.status == ESP_OK)
             {
                 ESP_LOGI(TAG, "START OK");
-                if(_switch_paired)
-                {
-                    ESP_LOGI(TAG, "Setting to non-connectable, non-discoverable, then attempting connection.");
-                    esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
-                    util_bluetooth_connect(global_loaded_settings.paired_host_switch_mac);
-                }
-                else
-                {
-                    ESP_LOGI(TAG, "Setting to connectable, discoverable.");
-                    esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-                }
+                led_set_state(LED_PAIRING);  // 🟠 Amber while advertising/reconnecting
+
+                if (_switch_paired) {
+					// Adaptive reconnect timing
+					int64_t uptime_ms = esp_timer_get_time() / 1000;
+					int reconnect_delay = (uptime_ms < 3000) ? 700 : 200;  // longer on cold boot, short after reset
+
+					ESP_LOGI(TAG,
+							 "Known host found — waiting %d ms before reconnect...",
+							 reconnect_delay);
+
+					// Visual feedback while waiting
+					led_set_state(LED_PAIRING);  // amber blink to show it's reconnecting
+
+					vTaskDelay(pdMS_TO_TICKS(reconnect_delay));
+
+					// Attempt quick reconnect
+					util_bluetooth_connect(global_loaded_settings.paired_host_switch_mac);
+				} else {
+					ESP_LOGI(TAG, "No paired host found — entering discoverable mode.");
+					esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+				}
+
+
+
+            }
+            else
+            {
+                ESP_LOGE(TAG, "START failed!");
+                led_set_state(LED_ERROR);    // 🔴 Red on failure
             }
             break;
         }
 
+        // --------------------------------------------------------------
+        // HID Connect: connection established successfully
+        // --------------------------------------------------------------
         case ESP_HIDD_CONNECT_EVENT:
         {
             if (param->connect.status == ESP_OK)
             {
                 _hid_connected = true;
                 ESP_LOGI(TAG, "CONNECT OK");
-
+                led_set_state(LED_CONNECTED); // 🟢 Green = connected
             }
             else
             {
                 ESP_LOGE(TAG, "CONNECT failed!");
+                led_set_state(LED_ERROR);     // 🔴 Red = connection failure
             }
             break;
         }
 
-        case ESP_HIDD_PROTOCOL_MODE_EVENT:
-        {
-            ESP_LOGI(TAG, "PROTOCOL MODE[%u]: %s", param->protocol_mode.map_index, param->protocol_mode.protocol_mode ? "REPORT" : "BOOT");
-            break;
-        }
-
-        case ESP_HIDD_OUTPUT_EVENT:
-        {
-            //ESP_LOGI(TAG, "OUTPUT[%u]: %8s ID: %2u, Len: %d, Data:", param->output.map_index, esp_hid_usage_str(param->output.usage), param->output.report_id, param->output.length);
-            //ESP_LOG_BUFFER_HEX(TAG, param->output.data, param->output.length);
-            ns_report_handler(param->output.report_id, param->output.data, param->output.length);
-            break;
-        }
-
-        case ESP_HIDD_FEATURE_EVENT:
-        {
-            //ESP_LOGI(TAG, "FEATURE[%u]: %8s ID: %2u, Len: %d, Data:", param->feature.map_index, esp_hid_usage_str(param->feature.usage), param->feature.report_id, param->feature.length);
-            ESP_LOG_BUFFER_HEX(TAG, param->feature.data, param->feature.length);
-            break;
-        }
-
+        // --------------------------------------------------------------
+        // HID Disconnect: controller disconnected (graceful or lost link)
+        // --------------------------------------------------------------
         case ESP_HIDD_DISCONNECT_EVENT:
         {
+            _hid_connected = false;
+            _ns_reset_report_spacer();
+
             if (param->disconnect.status == ESP_OK)
             {
-                _hid_connected = false;
-                _ns_reset_report_spacer();
                 ESP_LOGI(TAG, "DISCONNECT OK");
+
+                // Return to advertising mode for pairing
+                led_set_state(LED_PAIRING);   // 🟠 Amber while re-advertising
+                esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
             }
             else
             {
                 ESP_LOGE(TAG, "DISCONNECT failed!");
+                led_set_state(LED_ERROR);     // 🔴 Red on disconnect error
             }
             break;
         }
 
-        case ESP_HIDD_STOP_EVENT:
+        // --------------------------------------------------------------
+        // Protocol mode: report/boot (not visually significant)
+        // --------------------------------------------------------------
+        case ESP_HIDD_PROTOCOL_MODE_EVENT:
         {
-            ESP_LOGI(TAG, " HID STOP");
+            ESP_LOGI(TAG, "PROTOCOL MODE[%u]: %s",
+                     param->protocol_mode.map_index,
+                     param->protocol_mode.protocol_mode ? "REPORT" : "BOOT");
             break;
         }
 
+        // --------------------------------------------------------------
+        // Output report (rumble, LEDs, etc.)
+        // --------------------------------------------------------------
+        case ESP_HIDD_OUTPUT_EVENT:
+        {
+            ns_report_handler(param->output.report_id,
+                              param->output.data,
+                              param->output.length);
+            break;
+        }
+
+        // --------------------------------------------------------------
+        // Feature report (debug/log only)
+        // --------------------------------------------------------------
+        case ESP_HIDD_FEATURE_EVENT:
+        {
+            ESP_LOG_BUFFER_HEX(TAG, param->feature.data, param->feature.length);
+            break;
+        }
+
+        // --------------------------------------------------------------
+        // HID Stop: Bluetooth subsystem halted
+        // --------------------------------------------------------------
+        case ESP_HIDD_STOP_EVENT:
+        {
+            ESP_LOGI(TAG, "HID STOP");
+            _hid_connected = false;
+            led_set_state(LED_IDLE);          // 🔵 Blue = idle/sleeping
+            break;
+        }
+
+        // --------------------------------------------------------------
+        // Default: no-op
+        // --------------------------------------------------------------
         default:
             break;
     }
 }
+
+
 
 // Switch HID report maps
 esp_hid_raw_report_map_t switch_report_maps[1] = {
@@ -498,39 +561,39 @@ int core_bt_switch_start(void)
     uint8_t tmpmac[6] = {0};
     uint8_t *mac = global_live_data.current_mac;
 
-    if( (mac[0] == 0) && (mac[1] == 0) )
-    {
+    if ((mac[0] == 0) && (mac[1] == 0)) {
         mac = global_loaded_settings.device_mac_switch;
     }
 
     memcpy(tmpmac, mac, 6);
-    // On ESP32, the Bluetooth address is the base MAC with the last octet +=2
+    // On ESP32, the Bluetooth address is the base MAC with the last octet -= 2
     tmpmac[5] -= 2;
     err = util_bluetooth_init(tmpmac);
 
     _switch_paired = false;
-
-    for (uint8_t i = 0; i < 6; i++)
-    {
-        if (global_loaded_settings.paired_host_switch_mac[i] > 0)
+    for (uint8_t i = 0; i < 6; i++) {
+        if (global_loaded_settings.paired_host_switch_mac[i] > 0) {
             _switch_paired = true;
+        }
     }
 
-    if(_switch_paired)
-    {
-        ESP_LOGI(TAG, "Paired host found");
+    if (_switch_paired) {
+        ESP_LOGI(TAG, "Paired host found (will reconnect after HIDD_START_EVENT)");
+    } else {
+        ESP_LOGI(TAG, "No paired host found");
     }
 
-    // Starting bt mode
+    // Register HID application
     err = util_bluetooth_register_app(&switch_app_params, &switch_hidd_config);
 
     return 1;
 }
 
+
 // Stop Nintendo Switch controller core
 void core_bt_switch_stop(void)
 {
-    const char *TAG = "core_ns_stop";
+    //const char *TAG = "core_ns_stop";
     util_bluetooth_deinit();
 }
 
@@ -614,7 +677,7 @@ void _switch_bt_task_standard(void *parameters)
                         }
                     }
                     if (changed) {
-                        ESP_LOGI("MAP/out", "Buttons [3..5]: %02X %02X %02X",
+                        ESP_LOGI("MAP/out", "Buttons [2..4]: %02X %02X %02X",
                                  _full_buffer[2], _full_buffer[3], _full_buffer[4]);
                         memcpy(last_btn, &_full_buffer[2], 3);
                     }

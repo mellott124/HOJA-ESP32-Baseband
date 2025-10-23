@@ -13,4 +13,5 @@ idf_component_register(SRCS "main.c" "mitch_i2c.c"
                             "switch_haptics.c"
                             "imu_tool.c"
                             "interval.c"
+			    "LED.c"
                     INCLUDE_DIRS "." "include" "include/switch")
