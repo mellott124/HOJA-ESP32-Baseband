@@ -568,26 +568,46 @@ int core_bt_switch_start(void)
     memcpy(tmpmac, mac, 6);
     // On ESP32, the Bluetooth address is the base MAC with the last octet -= 2
     tmpmac[5] -= 2;
+
+    // --------------------------------------------------
+    // 🧩 Force paired flag if a stored host MAC exists
+    // --------------------------------------------------
+    const uint8_t zero_mac[6] = {0};
+    if (memcmp(global_loaded_settings.paired_host_switch_mac, zero_mac, 6) != 0) {
+        _switch_paired = true;
+        ESP_LOGI(TAG,
+                 "Detected stored paired host %02X:%02X:%02X:%02X:%02X:%02X — enabling quick reconnect",
+                 global_loaded_settings.paired_host_switch_mac[0],
+                 global_loaded_settings.paired_host_switch_mac[1],
+                 global_loaded_settings.paired_host_switch_mac[2],
+                 global_loaded_settings.paired_host_switch_mac[3],
+                 global_loaded_settings.paired_host_switch_mac[4],
+                 global_loaded_settings.paired_host_switch_mac[5]);
+
+        // 🟩 Bullet-proof fallback:
+        ESP_LOGI(TAG, "Quick reconnect path enabled");
+    } else {
+        _switch_paired = false;
+        ESP_LOGI(TAG, "No stored paired host found — entering pairing mode.");
+
+        // 🟧 Safety: always re-advertise so we never get stuck invisible
+        esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+    }
+
+    // --------------------------------------------------
+    // Initialize Bluetooth with valid MAC
+    // --------------------------------------------------
     err = util_bluetooth_init(tmpmac);
 
-    _switch_paired = false;
-    for (uint8_t i = 0; i < 6; i++) {
-        if (global_loaded_settings.paired_host_switch_mac[i] > 0) {
-            _switch_paired = true;
-        }
-    }
-
-    if (_switch_paired) {
-        ESP_LOGI(TAG, "Paired host found (will reconnect after HIDD_START_EVENT)");
-    } else {
-        ESP_LOGI(TAG, "No paired host found");
-    }
-
+    // --------------------------------------------------
     // Register HID application
+    // --------------------------------------------------
     err = util_bluetooth_register_app(&switch_app_params, &switch_hidd_config);
 
     return 1;
 }
+
+
 
 
 // Stop Nintendo Switch controller core

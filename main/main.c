@@ -350,11 +350,16 @@ uint64_t app_get_report_timer(void){ return _app_report_timer_us; }
 void app_main(void)
 {
     ESP_LOGI(TAG, "System start");
+    uint8_t mac[6];
+    esp_err_t ret = esp_efuse_mac_get_default(mac);
+    ESP_LOGI("MACCHECK", "esp_efuse_mac_get_default() returned %s", esp_err_to_name(ret));
+    ESP_LOGI("MACCHECK", "Base MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     // --------------------------------------------------
     // 🧭 STEP 1: Initialize NVS
     // --------------------------------------------------
-    esp_err_t ret = nvs_flash_init();
+    ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase();
         nvs_flash_init();
@@ -365,11 +370,10 @@ void app_main(void)
     // --------------------------------------------------
     app_settings_load();
     gpio_input_init();
-	led_init();
-	led_boot_sweep(); //Boot animation
-	xTaskCreate(led_task, "led_task", 2048, NULL, 2, NULL);
-	led_set_state(LED_IDLE);
-
+    led_init();
+    led_boot_sweep(); // Boot animation
+    xTaskCreate(led_task, "led_task", 2048, NULL, 2, NULL);
+    led_set_state(LED_IDLE);
 
     // --------------------------------------------------
     // 🧩 STEP 3: Log and sanitize MAC
@@ -383,20 +387,30 @@ void app_main(void)
              global_loaded_settings.device_mac_switch[5]);
 
     // --------------------------------------------------
-    // 🟧 STEP 4: Initialize Bluetooth core
+    // 🟧 STEP 4: Apply correct base MAC before Bluetooth startup
+    // --------------------------------------------------
+    uint8_t base_mac[6];
+	esp_read_mac(base_mac, ESP_MAC_BT);
+	ESP_LOGI(TAG, "Applying base BT MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+			 base_mac[0], base_mac[1], base_mac[2],
+			 base_mac[3], base_mac[4], base_mac[5]);
+	esp_base_mac_addr_set(base_mac);
+
+
+    // --------------------------------------------------
+    // 🟪 STEP 5: Initialize Bluetooth core
     // --------------------------------------------------
     ESP_LOGI(TAG, "Switch BT Mode Init...");
     int bt_status = core_bt_switch_start();
 
     if (bt_status == 1) {
-        // Now Bluetooth HID stack is active
-        led_set_state(LED_PAIRING);  // 🟠 Amber = advertising/reconnecting
+        led_set_state(LED_PAIRING);  // Amber = advertising/reconnecting
     } else {
-        led_set_state(LED_ERROR);    // 🔴 Red = failure
+        led_set_state(LED_ERROR);    // Red = failure
     }
 
     // --------------------------------------------------
-    // 🧾 STEP 5: Verify MAC post-start
+    // 🧾 STEP 6: Verify MAC post-start
     // --------------------------------------------------
     esp_read_mac(global_live_data.current_mac, ESP_MAC_BT);
     ESP_LOGI(TAG, "Refreshed BT MAC after core start: %02X:%02X:%02X:%02X:%02X:%02X",
@@ -427,9 +441,10 @@ void app_main(void)
     }
 
     // --------------------------------------------------
-    // 🕹️ STEP 6: Launch controller input task
+    // 🕹️ STEP 7: Launch controller input task
     // --------------------------------------------------
     bt_pairing = true;  // initial pairing mode (used by LED state machine)
     xTaskCreatePinnedToCore(controller_task, "controller_task", 4096, NULL, 1, NULL, 1);
 }
+
 
