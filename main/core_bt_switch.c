@@ -239,11 +239,14 @@ void _switch_bt_task_short(void *parameters);
 
 void switch_bt_end_task()
 {
-    if(_switch_bt_task_handle != NULL)
-    {
-        vTaskDelete(_switch_bt_task_handle);
+    if (_switch_bt_task_handle != NULL) {
+        // Defer deletion to the task context (safe FreeRTOS method)
+        ESP_LOGI("switch_bt_end_task", "Deferring delete of _switch_bt_task_standard");
+        xTaskNotifyGive(_switch_bt_task_handle);
+        _switch_bt_task_handle = NULL;
     }
 }
+
 
 // Unused
 void btsnd_hcic_sniff_mode_cb(bool sniff, uint16_t tx_lat, uint16_t rx_lat)
@@ -309,32 +312,19 @@ void switch_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
         break;
 
     case ESP_BT_GAP_ACL_DISCONN_CMPL_STAT_EVT:
-        ESP_LOGI(TAG, "ACL Disconnect Complete.");
-        
-        if(_switch_bt_task_handle!=NULL)
-        {
-            vTaskDelete(_switch_bt_task_handle);
-            _switch_bt_task_handle = NULL;
-        }
+		ESP_LOGI(TAG, "ACL Disconnect Complete.");
 
-        app_set_connected_status(0);
+		// 🧩 Defer task deletion safely to avoid crash
+		if (_switch_bt_task_handle != NULL) {
+			ESP_LOGI(TAG, "Deferring delete of _switch_bt_task_standard");
+			xTaskNotifyGive(_switch_bt_task_handle);
+			_switch_bt_task_handle = NULL;
+		}
 
-        app_set_power_setting(POWER_CODE_OFF); // Shut down
-        
-        /*
-        if(_switch_paired)
-        {
-            ESP_LOGI(TAG, "Setting to non-connectable, non-discoverable, then attempting connection.");
-            esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
-            util_bluetooth_connect(global_loaded_settings.paired_host_switch_mac);
-        }
-        else
-        {
-            ESP_LOGI(TAG, "Setting to connectable, discoverable.");
-            esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-        }*/
+		app_set_connected_status(0);
+		app_set_power_setting(POWER_CODE_OFF); // your existing shutdown call
+		break;
 
-        break;
     
     case ESP_BT_GAP_AUTH_CMPL_EVT:
     {
@@ -670,8 +660,15 @@ void _switch_bt_task_standard(void *parameters)
     app_set_report_timer(DEFAULT_US_DELAY);
 
     for (;;)
-    {
-        static uint8_t _full_buffer[64] = {0};
+	{
+		// Handle deferred shutdown requests from GAP callback
+		if (ulTaskNotifyTake(pdTRUE, 0)) {
+			ESP_LOGI("_switch_bt_task_standard", "Delete requested, exiting task cleanly");
+			vTaskDelete(NULL); // self-delete safely
+		}
+
+		static uint8_t _full_buffer[64] = {0};
+
         uint8_t tmp[64] = {0x00, 0x00};
 
         // Only send when connected
