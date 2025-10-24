@@ -200,12 +200,12 @@ static void controller_task(void* arg)
     while (true)
     {
         // ------------------------------------------------------------------
-        // SYNC BUTTON — Match Official Nintendo Behavior
+        // SYNC BUTTON — 8BitDo-style hybrid behavior (fixed, self-contained)
         // ------------------------------------------------------------------
         bool level_high = gpio_get_level(GPIO_BTN_SYNC);
         int64_t now = esp_timer_get_time();
 
-        // Detect press
+        // Detect press (active-low)
         if (sync_prev_high && !level_high) {
             sync_t0 = now;
             ESP_LOGI(TAG, "SYNC pressed (active low)");
@@ -216,24 +216,34 @@ static void controller_task(void* arg)
             int64_t held_ms = (now - sync_t0) / 1000;
             ESP_LOGI(TAG, "SYNC released after %lld ms", held_ms);
 
-            if (held_ms >= 2000) {
-                // --- Long press (2+ sec): Factory reset pairing ---
-                ESP_LOGW(TAG, "SYNC long-press — factory reset pairing...");
+            if (held_ms >= 3500) {
+                // --- Long press (≥3.5 s): full factory reset / re-pair ---
+                ESP_LOGW(TAG, "SYNC long-press — performing factory reset and re-pair");
                 led_set_state(LED_ERROR);
-                vTaskDelay(pdMS_TO_TICKS(200));
+                vTaskDelay(pdMS_TO_TICKS(250));
+
+                memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
+                app_settings_save();
+
+                // Enter discoverable mode before restart
+                esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
                 led_set_state(LED_PAIRING);
-                vTaskDelay(pdMS_TO_TICKS(200));
-                restart_factory_reset();
-            } else {
-                // --- Short press (<2 sec): quick Joy-Con style amber pulse ---
-                ESP_LOGI(TAG, "SYNC short-press — quick amber pulse (no reset)");
+                vTaskDelay(pdMS_TO_TICKS(250));
+
+                restart_factory_reset();   // your existing deep reset routine
+            }
+            else if (held_ms >= 100) {
+                // --- Short press (<3.5 s): reconnect cycle via soft reboot ---
+                ESP_LOGI(TAG, "SYNC short-press — performing quick reconnect reset");
                 led_set_state(LED_PAIRING);
-                vTaskDelay(pdMS_TO_TICKS(100));   // fast flash, Joy-Con style
-                led_set_state(LED_IDLE);
+                vTaskDelay(pdMS_TO_TICKS(150));
+                esp_restart();   // soft reset to trigger BT reconnection
             }
         }
 
         sync_prev_high = level_high;
+
+
 
         // ------------------------------------------------------------------
         // MAIN CONTROLLER BUTTON READS
@@ -400,6 +410,14 @@ void app_main(void)
     // --------------------------------------------------
     // 🟪 STEP 5: Initialize Bluetooth core
     // --------------------------------------------------
+	ESP_LOGI(TAG, "Stored paired host: %02X:%02X:%02X:%02X:%02X:%02X",
+         global_loaded_settings.paired_host_switch_mac[0],
+         global_loaded_settings.paired_host_switch_mac[1],
+         global_loaded_settings.paired_host_switch_mac[2],
+         global_loaded_settings.paired_host_switch_mac[3],
+         global_loaded_settings.paired_host_switch_mac[4],
+         global_loaded_settings.paired_host_switch_mac[5]);
+
     ESP_LOGI(TAG, "Switch BT Mode Init...");
     int bt_status = core_bt_switch_start();
 
