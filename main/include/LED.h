@@ -15,6 +15,7 @@
 #define HIGH 1
 #define LOW  0
 
+
 // LED states
 typedef enum {
     LED_IDLE,       // Blue blink (boot/idle)
@@ -28,5 +29,7 @@ void led_init(void);
 void led_task(void *arg);
 void led_set_state(led_state_t state);
 void led_boot_sweep(void);   // ✅ new helper for startup animation
+void led_set_player_number(uint8_t num);
+uint8_t led_get_player_number(void);
 
 #endif

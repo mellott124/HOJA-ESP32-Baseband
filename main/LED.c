@@ -10,7 +10,7 @@
 // --------------------------------------------------------------------------
 static led_state_t current_led_state = LED_IDLE;
 static SemaphoreHandle_t led_mutex = NULL;
-
+static uint8_t led_player_number = 1; // default to player 1
 static const char *TAG = "LED";
 
 // --------------------------------------------------------------------------
@@ -40,6 +40,19 @@ void led_init(void)
     ESP_LOGI(TAG, "LED initialized (pins: R=%d, G=%d, B=%d)",
              HEART_BEAT_RED, HEART_BEAT_GREEN, HEART_BEAT_BLUE);
 }
+
+void led_set_player_number(uint8_t num)
+{
+    if (num == 0)
+        num = 1;  // Always show at least Player 1
+    led_player_number = num;
+}
+
+uint8_t led_get_player_number(void)
+{
+    return led_player_number;
+}
+
 
 void led_boot_sweep(void)
 {
@@ -115,11 +128,24 @@ void led_task(void *arg)
                 break;
 
             case LED_CONNECTED:
-                gpio_set_level(HEART_BEAT_GREEN, LOW);
-                vTaskDelay(pdMS_TO_TICKS(400));
-                gpio_set_level(HEART_BEAT_GREEN, HIGH);
-                vTaskDelay(pdMS_TO_TICKS(1000));
-                break;
+			{
+				uint8_t blink_count = led_player_number;
+
+				for (uint8_t i = 0; i < blink_count; i++) {
+					// Green ON (active-low)
+					gpio_set_level(HEART_BEAT_GREEN, LOW);
+					vTaskDelay(pdMS_TO_TICKS(200));
+
+					// LED OFF
+					gpio_set_level(HEART_BEAT_GREEN, HIGH);
+					vTaskDelay(pdMS_TO_TICKS(200));
+				}
+
+
+				// Pause between blink cycles
+				vTaskDelay(pdMS_TO_TICKS(1000));
+				break;
+			}
 
             case LED_ERROR:
                 gpio_set_level(HEART_BEAT_RED, LOW);

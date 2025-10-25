@@ -1,0 +1,45 @@
+LED Color and Blink Guide (Updated)
+=================================
+
+Blue – Idle / Standby
+---------------------
+Pattern: Short blink (150 ms on, 1.25 s off)
+Meaning: Controller powered but not connected.
+When: Waiting for Bluetooth connection or before pairing.
+
+Amber – Pairing / Discoverable
+------------------------------
+Pattern: Alternating amber blink (300 ms on, 300 ms off)
+Meaning: In Bluetooth pairing / advertising mode.
+When: After long SYNC press, factory reset, or startup with no stored host.
+
+Green – Connected (Player-Linked)
+---------------------------------
+Pattern: Blinks green N times per cycle, where N = player number (1 – 4 typical)
+Each blink = 200 ms on, 200 ms off, followed by a 1 s pause.
+Meaning: Connected and actively communicating.
+When: During gameplay or after auto-reconnect.
+
+Examples:
+- Player 1 → 1 blink per cycle
+- Player 2 → 2 blinks
+- Player 3 → 3 blinks
+- Player 4 → 4 blinks
+
+Red – Error / Bluetooth Failure
+-------------------------------
+Pattern: Blinking red (800 ms on, 800 ms off)
+Meaning: Bluetooth error — pairing failed, authentication error, or disconnect.
+When: Connection attempt fails or pairing lost.
+
+Startup Sweep
+-------------
+Pattern: Red → Green → Blue (each 200 ms)
+Meaning: Power-on self-test confirming controller booted normally.
+When: Immediately after power-up.
+
+Notes
+-----
+- There is no permanent “off” LED state.
+- The controller always runs one of these four modes: IDLE, PAIRING, CONNECTED, or ERROR.
+- In sleep mode, LED behavior depends on firmware power management state.

@@ -198,7 +198,6 @@ void ns_subcommand_handler(uint8_t subcommand, uint8_t *data, uint16_t len)
     break;
 
   case SW_CMD_SET_PLAYER:
-    printf("Set player: \n");
     ns_report_setack(0x80);
 
     // We set pairing address here
@@ -247,6 +246,7 @@ void ns_subcommand_handler(uint8_t subcommand, uint8_t *data, uint16_t len)
     }
 
     app_set_connected_status(set_num);
+	printf("Set player: %d\n", set_num);
     break;
 
   default:

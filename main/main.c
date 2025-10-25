@@ -321,7 +321,16 @@ static void controller_task(void* arg)
 // --------------------------------------------------------------------------
 // HOJA CALLBACK STUBS
 // --------------------------------------------------------------------------
-void app_set_connected_status(uint8_t s){ bt_connected=(s!=0); bt_pairing=!bt_connected; bt_error=false; }
+void app_set_connected_status(uint8_t s)
+{
+    bt_connected = (s != 0);
+    bt_pairing = !bt_connected;
+    bt_error = false;
+
+    // Update LED player number (for connected blink pattern)
+    led_set_player_number(s);
+}
+
 void app_set_standard_haptic(uint8_t l,uint8_t r){ (void)l; (void)r; }
 void app_set_sinput_haptic(uint8_t*d,uint8_t l){ (void)d; (void)l; }
 void app_set_switch_haptic(uint8_t*d){ (void)d; }

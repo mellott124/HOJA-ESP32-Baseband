@@ -1,0 +1,91 @@
+RetroOnyx ESP32 Firmware – Developer Reference
+=============================================
+
+Overall Architecture
+--------------------
+The firmware operates in 3 coordinated layers:
+
+| Layer | Responsibility | Key Files |
+|-------|----------------|-----------|
+| Application Layer | System state, SYNC button logic, LED and BT coordination | main.c |
+| Bluetooth Core Layer | HID, GAP events, pairing, reconnection handling | core_bt_switch.c |
+| Command Handler Layer | Switch protocol parsing and response generation | switch_commands.c |
+| UI/Indicator Layer | RGB LED feedback and heartbeat tasks | LED.c, LED.h |
+
+main.c – System / Control Core
+------------------------------
+Key Roles
+- Initializes peripherals, LEDs, and Bluetooth subsystem.
+- Monitors SYNC button (GPIO2) and classifies short vs. long press.
+- Launches background tasks for controller logic and LED state.
+- Maintains connection flags (bt_connected, bt_pairing, bt_error).
+
+Important Functions
+- app_main(): Entry point; starts controller_task and LED task.
+- controller_task(): Handles SYNC timing and triggers:
+  * Short press → reconnect (ns_bt_hidd_connect()).
+  * Long press → clears paired MAC and restarts pairing.
+- app_set_connected_status(uint8_t s): Updates connection flags and LED player number (led_set_player_number(s)).
+
+core_bt_switch.c – Bluetooth Stack Integration
+----------------------------------------------
+Key Roles
+- Handles GAP, HIDD, and SDP callbacks.
+- Manages pairing, reconnection, and connection cleanup.
+- Initializes Bluetooth with MAC derived from base hardware address.
+
+Important Functions
+- core_bt_switch_start(): Initializes BT core, checks for saved host, registers HID app.
+- switch_bt_gap_cb(): GAP event handler; detects connect/disconnect and restarts advertising.
+- ns_bt_hidd_cb(): HIDD events; triggers reconnect or pairing logic.
+- Stability fix: prevents double-free when Switch sleeps (vTaskDelete safety patch).
+
+Behavior
+- Auto-reconnects on known host.
+- Falls back to pairing mode on failure or long SYNC press.
+
+switch_commands.c – Nintendo Switch Protocol Layer
+--------------------------------------------------
+Key Roles
+- Responds to all Joy-Con subcommands from the Switch.
+- Assembles 0x21 HID reports (input + subcommand response).
+- Manages IMU, vibration, SPI reads, and player number assignment.
+
+Important Functions
+- ns_subcommand_handler(uint8_t subcommand, uint8_t *data, uint16_t len)
+  * SW_CMD_SET_PLAYER → determines player number (1–4) and calls app_set_connected_status(set_num).
+
+Highlights
+- Properly sets ACK bits for each subcommand.
+- Prints all command names and SPI address ranges for debugging.
+
+LED.c / LED.h – User Feedback Layer
+-----------------------------------
+Key Roles
+- Provides visual feedback for BT state and connection.
+- Manages single shared LED task and state machine.
+- Supports player-linked blinking.
+
+Main States
+| State | Color | Pattern | Trigger |
+|--------|--------|----------|----------|
+| LED_IDLE | Blue | 150 ms on / 1250 ms off | No BT connection |
+| LED_PAIRING | Amber | 300 ms on / 300 ms off | Pairing mode |
+| LED_CONNECTED | Green | N short blinks per cycle (N = player) | Connected |
+| LED_ERROR | Red | 800 ms on / 800 ms off | BT/auth failure |
+
+Helpers
+- led_set_state(LED_STATE s): Transitions LED mode.
+- led_set_player_number(uint8_t num): Updates blink count.
+- led_task(): Runs LED state machine under RTOS timing.
+
+Behavior Flow Summary
+---------------------
+1. Power-on → LED sweep → loads NVS → starts Bluetooth core.
+2. No stored host → Enters pairing mode (amber).
+3. Known host found → Auto-reconnect (green blinks).
+4. SYNC button
+   - Short press → reconnect attempt.
+   - Long press → clear host, restart pairing.
+5. Error / failure → Red blinking until reset or reconnect.
+6. Player assignment → Switch sends SW_CMD_SET_PLAYER; LED blinks N times.
