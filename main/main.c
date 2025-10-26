@@ -272,49 +272,32 @@ static void controller_task(void* arg)
         input.ry = 0x7FFF;
 
         // ------------------------------------------------------------------
-        // SELECT BUTTON + MODIFIER COMBOS (with debounce)
-        // ------------------------------------------------------------------
-                // ------------------------------------------------------------------
         // SELECT / COMBO BUTTON LOGIC
-        //   - Select alone        -> Minus
-        //   - Select + L          -> Home
-        //   - Select + R          -> Capture
+        //   - Select alone  → ZR  (acts as Z)
+        //   - Select + L    → Home
+        //   - Select + R    → Capture
         // ------------------------------------------------------------------
-        static int64_t last_select_event = 0;
-        const int DEBOUNCE_MS = 20;
-
         bool sel    = !gpio_get_level(GPIO_BTN_SELECT);
         bool trig_l = !gpio_get_level(GPIO_BTN_L);
         bool trig_r = !gpio_get_level(GPIO_BTN_R);
 
-        // Clear virtual buttons each frame; we’ll set the ones we need
-        input.button_capture     = false;
-        input.button_home        = false;
-        input.button_stick_left  = false;
-        input.button_stick_right = false;
+        // clear virtual button flags each loop
+        input.button_home    = false;
+        input.button_capture = false;
+        input.button_stick_left     = false;
 
-        now_us = esp_timer_get_time();
-        int64_t elapsed_ms = (now_us - last_select_event) / 1000;
-
-        // We only act on the *press* event with a small debounce
-        if (sel && elapsed_ms > DEBOUNCE_MS) {
-            last_select_event = now_us;
-
+        if (sel) {
             if (trig_l) {
-                // Select + L -> HOME
-                input.button_home = true;
-                ESP_LOGI(TAG, "Select + L -> HOME");
-            } else if (trig_r) {
-                // Select + R -> CAPTURE
-                input.button_capture = true;
-                ESP_LOGI(TAG, "Select + R -> CAPTURE");
-            } else {
-                // Select alone -> MINUS
-				//input.trigger_zl = true; //Triggers ZL on Switch in N64 mode
-                input.button_stick_left = true; //Triggers ZR on Switch in N64 mode
-				//input.button_stick_right = true; //Triggers nothing on Switch in N64 mode
-				//input.trigger_gl = true; //does nothing.  Neither do t_r_sr and variants
-                ESP_LOGI(TAG, "Select -> ZR");
+                input.button_home = true;        // Select + L → Home
+                ESP_LOGI(TAG, "Select + L → HOME");
+            }
+            else if (trig_r) {
+                input.button_capture = true;     // Select + R → Capture
+                ESP_LOGI(TAG, "Select + R → CAPTURE");
+            }
+            else {
+                input.button_stick_left = true;  // Select alone → ZR (acts as Z)
+                ESP_LOGI(TAG, "Select → ZR");
             }
         }
 		
@@ -363,14 +346,22 @@ void app_save_host_mac(input_mode_t m, uint8_t *a)
 }
 
 
-bool app_compare_mac(uint8_t*a,uint8_t*b){ return memcmp(a,b,6)==0; }
+bool app_compare_mac(uint8_t*a,uint8_t*b){ 
+	return memcmp(a,b,6)==0; 
+}
 
 uint64_t get_timestamp_ms(void){ return esp_timer_get_time()/1000ULL; }
 uint64_t get_timestamp_us(void){ return esp_timer_get_time(); }
 uint32_t get_timer_value(void){ return (uint32_t)esp_timer_get_time(); }
 
-void app_set_report_timer(uint64_t t){ _app_report_timer_us_default=t; if(!_sniff)_app_report_timer_us=_app_report_timer_us_default; }
-uint64_t app_get_report_timer(void){ return _app_report_timer_us; }
+void app_set_report_timer(uint64_t t){ 
+	_app_report_timer_us_default=t; 
+	if(!_sniff)_app_report_timer_us=_app_report_timer_us_default; 
+}
+
+uint64_t app_get_report_timer(void){ 
+	return _app_report_timer_us; 
+}
 
 // --------------------------------------------------------------------------
 // APP MAIN
