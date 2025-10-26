@@ -187,9 +187,6 @@ static void restart_factory_reset(void)
 // --------------------------------------------------------------------------
 static void controller_task(void* arg)
 {
-    bool sync_prev_high = true;
-    int64_t sync_t0 = 0;
-
     ESP_LOGI(TAG, "Monitoring SYNC pin (GPIO%d)", GPIO_BTN_SYNC);
 
     i2cinput_input_s input = {0};
@@ -200,50 +197,53 @@ static void controller_task(void* arg)
     while (true)
     {
         // ------------------------------------------------------------------
-        // SYNC BUTTON — 8BitDo-style hybrid behavior (fixed, self-contained)
-        // ------------------------------------------------------------------
-        bool level_high = gpio_get_level(GPIO_BTN_SYNC);
-        int64_t now = esp_timer_get_time();
+		// SYNC COMBO — L + R + C-Down (replaces physical SYNC pin)
+		// ------------------------------------------------------------------
+		static bool combo_active = false;
+		static int64_t combo_start_us = 0;
 
-        // Detect press (active-low)
-        if (sync_prev_high && !level_high) {
-            sync_t0 = now;
-            ESP_LOGI(TAG, "SYNC pressed (active low)");
-        }
+		bool combo_now = (
+			!gpio_get_level(GPIO_BTN_L) &&    // L pressed
+			!gpio_get_level(GPIO_BTN_R) &&    // R pressed
+			!gpio_get_level(GPIO_BTN_C_D)     // C-Down pressed
+		);
 
-        // Detect release
-        if (!sync_prev_high && level_high) {
-            int64_t held_ms = (now - sync_t0) / 1000;
-            ESP_LOGI(TAG, "SYNC released after %lld ms", held_ms);
+		int64_t now_us = esp_timer_get_time();
 
-            if (held_ms >= 3500) {
-                // --- Long press (≥3.5 s): full factory reset / re-pair ---
-                ESP_LOGW(TAG, "SYNC long-press — performing factory reset and re-pair");
-                led_set_state(LED_ERROR);
-                vTaskDelay(pdMS_TO_TICKS(250));
+		if (combo_now && !combo_active) {
+			combo_active = true;
+			combo_start_us = now_us;
+			ESP_LOGI(TAG, "SYNC combo (L+R+C-Down) started");
+		}
 
-                memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
-                app_settings_save();
+		if (!combo_now && combo_active) {
+			combo_active = false;
+			int64_t held_ms = (now_us - combo_start_us) / 1000;
+			ESP_LOGI(TAG, "SYNC combo released after %lld ms", held_ms);
 
-                // Enter discoverable mode before restart
-                esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-                led_set_state(LED_PAIRING);
-                vTaskDelay(pdMS_TO_TICKS(250));
+			if (held_ms >= 3500) {
+				// --- Long hold: full factory reset / re-pair ---
+				ESP_LOGW(TAG, "SYNC combo long-press → factory reset / pairing");
+				led_set_state(LED_ERROR);
+				vTaskDelay(pdMS_TO_TICKS(250));
 
-                restart_factory_reset();   // your existing deep reset routine
-            }
-            else if (held_ms >= 100) {
-                // --- Short press (<3.5 s): reconnect cycle via soft reboot ---
-                ESP_LOGI(TAG, "SYNC short-press — performing quick reconnect reset");
-                led_set_state(LED_PAIRING);
-                vTaskDelay(pdMS_TO_TICKS(150));
-                esp_restart();   // soft reset to trigger BT reconnection
-            }
-        }
+				memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
+				app_settings_save();
 
-        sync_prev_high = level_high;
+				esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+				led_set_state(LED_PAIRING);
+				vTaskDelay(pdMS_TO_TICKS(250));
 
-
+				restart_factory_reset();
+			}
+			else if (held_ms >= 100) {
+				// --- Short hold: reconnect cycle ---
+				ESP_LOGI(TAG, "SYNC combo short-press → reconnect");
+				led_set_state(LED_PAIRING);
+				vTaskDelay(pdMS_TO_TICKS(150));
+				esp_restart();   // soft reboot to reconnect
+			}
+		}
 
         // ------------------------------------------------------------------
         // MAIN CONTROLLER BUTTON READS
@@ -261,8 +261,8 @@ static void controller_task(void* arg)
         input.button_minus     = !gpio_get_level(GPIO_BTN_C_R);   // VB C-Right → Switch Minus
         input.trigger_zr       = !gpio_get_level(GPIO_BTN_C_D);   // VB C-Down  → Switch ZR
 
-        input.trigger_l        = !gpio_get_level(GPIO_BTN_L);
-        input.trigger_r        = !gpio_get_level(GPIO_BTN_R);
+        input.trigger_l        = !gpio_get_level(GPIO_BTN_L);	  // VB C-Down  → Switch L
+        input.trigger_r        = !gpio_get_level(GPIO_BTN_R);	  // VB C-Down  → Switch R
         input.button_plus      = !gpio_get_level(GPIO_BTN_START); // VB Start   → Switch Plus
 
         // --- Center analog sticks (no movement yet) ---
@@ -274,39 +274,51 @@ static void controller_task(void* arg)
         // ------------------------------------------------------------------
         // SELECT BUTTON + MODIFIER COMBOS (with debounce)
         // ------------------------------------------------------------------
-        static int64_t last_select_press = 0;
-        const int DEBOUNCE_MS = 50;
+                // ------------------------------------------------------------------
+        // SELECT / COMBO BUTTON LOGIC
+        //   - Select alone        -> Minus
+        //   - Select + L          -> Home
+        //   - Select + R          -> Capture
+        // ------------------------------------------------------------------
+        static int64_t last_select_event = 0;
+        const int DEBOUNCE_MS = 20;
 
         bool sel    = !gpio_get_level(GPIO_BTN_SELECT);
         bool trig_l = !gpio_get_level(GPIO_BTN_L);
         bool trig_r = !gpio_get_level(GPIO_BTN_R);
 
+        // Clear virtual buttons each frame; we’ll set the ones we need
         input.button_capture     = false;
         input.button_home        = false;
         input.button_stick_left  = false;
         input.button_stick_right = false;
 
-        int64_t now_us = esp_timer_get_time();
-        int64_t elapsed_ms = (now_us - last_select_press) / 1000;
+        now_us = esp_timer_get_time();
+        int64_t elapsed_ms = (now_us - last_select_event) / 1000;
 
+        // We only act on the *press* event with a small debounce
         if (sel && elapsed_ms > DEBOUNCE_MS) {
-            last_select_press = now_us;
+            last_select_event = now_us;
 
             if (trig_l) {
-                input.button_home = true;           // Select + L → Home
-                ESP_LOGI(TAG, "Select+L combo (Home)");
-            } 
-            else if (trig_r) {
-                input.button_stick_left = true;     // Select + R → L-stick click
-                ESP_LOGI(TAG, "Select+R combo (L-Stick)");
-            } 
-            else {
-                input.button_capture = true;        // Select alone → Capture
-                ESP_LOGI(TAG, "Select alone (Capture)");
+                // Select + L -> HOME
+                input.button_home = true;
+                ESP_LOGI(TAG, "Select + L -> HOME");
+            } else if (trig_r) {
+                // Select + R -> CAPTURE
+                input.button_capture = true;
+                ESP_LOGI(TAG, "Select + R -> CAPTURE");
+            } else {
+                // Select alone -> MINUS
+				//input.trigger_zl = true; //Triggers ZL on Switch in N64 mode
+                input.button_stick_left = true; //Triggers ZR on Switch in N64 mode
+				//input.button_stick_right = true; //Triggers nothing on Switch in N64 mode
+				//input.trigger_gl = true; //does nothing.  Neither do t_r_sr and variants
+                ESP_LOGI(TAG, "Select -> ZR");
             }
         }
-
-        // ------------------------------------------------------------------
+		
+		// ------------------------------------------------------------------
         // SEND INPUT DATA TO SWITCH
         // ------------------------------------------------------------------
         switch_bt_sendinput(&input);
@@ -314,9 +326,6 @@ static void controller_task(void* arg)
         vTaskDelay(pdMS_TO_TICKS(8));  // ~125 Hz update rate
     }
 }
-
-
-
 
 // --------------------------------------------------------------------------
 // HOJA CALLBACK STUBS
