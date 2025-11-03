@@ -1,162 +1,192 @@
 #include "LED.h"
-#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/semphr.h"
 #include "esp_log.h"
+#include "driver/gpio.h"
+#include "driver/ledc.h"
+#include "driver/dac.h"
 
-// --------------------------------------------------------------------------
-// Internal state
-// --------------------------------------------------------------------------
-static led_state_t current_led_state = LED_IDLE;
-static SemaphoreHandle_t led_mutex = NULL;
-static uint8_t led_player_number = 1; // default to player 1
-static const char *TAG = "LED";
+#define TAG "LED"
 
-// --------------------------------------------------------------------------
-// Initialization
-// --------------------------------------------------------------------------
-void led_init(void)
+// -------------------------------------------------------------
+// Common-anode RGB LED wiring (LOW = ON, HIGH = OFF)
+// -------------------------------------------------------------
+#define LED_R_PIN  GPIO_NUM_26
+#define LED_G_PIN  GPIO_NUM_27
+#define LED_B_PIN  GPIO_NUM_25
+
+#define LED_MAX_DUTY     225
+#define LED_FREQ_HZ      5000
+#define LED_RES_BITS     LEDC_TIMER_8_BIT
+#define LED_OFF_DUTY     0  // after inversion, 0 = fully OFF, 255 = fully ON
+
+// -------------------------------------------------------------
+// LED state storage
+// -------------------------------------------------------------
+static led_state_t current_led_state = LED_OFF;
+static uint8_t player_number = 0;
+
+// -------------------------------------------------------------
+// Helper: reclaim DAC pins for LEDC use
+// -------------------------------------------------------------
+void led_reclaim_dac_pins(void)
 {
-    // Configure RGB GPIOs as outputs
-    gpio_config_t io_conf = {
-        .mode = GPIO_MODE_OUTPUT,
-        .pin_bit_mask = ((1ULL << HEART_BEAT_RED) |
-                         (1ULL << HEART_BEAT_GREEN) |
-                         (1ULL << HEART_BEAT_BLUE)),
+    dac_output_disable(DAC_CHAN_0);
+    dac_output_disable(DAC_CHAN_1);
+    ESP_LOGI(TAG, "DAC outputs disabled — pins reclaimed for LED PWM");
+}
+
+// -------------------------------------------------------------
+// Hardware PWM setup with output inversion
+// -------------------------------------------------------------
+static void led_hw_init(void)
+{
+    ledc_timer_config_t timer_conf = {
+        .speed_mode       = LEDC_LOW_SPEED_MODE,
+        .timer_num        = LEDC_TIMER_0,
+        .duty_resolution  = LED_RES_BITS,
+        .freq_hz          = LED_FREQ_HZ,
+        .clk_cfg          = LEDC_AUTO_CLK
     };
-    gpio_config(&io_conf);
+    ledc_timer_config(&timer_conf);
 
-    // Turn all off (active-low LEDs = HIGH)
-    gpio_set_level(HEART_BEAT_RED, HIGH);
-    gpio_set_level(HEART_BEAT_GREEN, HIGH);
-    gpio_set_level(HEART_BEAT_BLUE, HIGH);
-
-    // Create mutex for thread-safe updates
-    if (!led_mutex) {
-        led_mutex = xSemaphoreCreateMutex();
+    const int pins[3] = {LED_R_PIN, LED_G_PIN, LED_B_PIN};
+    for (int i = 0; i < 3; i++) {
+        ledc_channel_config_t ch = {
+            .gpio_num   = pins[i],
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel    = i,
+            .timer_sel  = LEDC_TIMER_0,
+            .duty       = LED_OFF_DUTY,
+            .hpoint     = 0,
+            .flags.output_invert = true // invert output for common-anode LEDs
+        };
+        ledc_channel_config(&ch);
     }
 
-    ESP_LOGI(TAG, "LED initialized (pins: R=%d, G=%d, B=%d)",
-             HEART_BEAT_RED, HEART_BEAT_GREEN, HEART_BEAT_BLUE);
+    ESP_LOGI(TAG, "LED initialized (pins: R=%d, G=%d, B=%d, inverted outputs)", LED_R_PIN, LED_G_PIN, LED_B_PIN);
 }
 
-void led_set_player_number(uint8_t num)
+// -------------------------------------------------------------
+// Helper: set RGB intensity (0–255 now maps normally)
+// -------------------------------------------------------------
+static inline void led_set_rgb(uint8_t r, uint8_t g, uint8_t b)
 {
-    if (num == 0)
-        num = 1;  // Always show at least Player 1
-    led_player_number = num;
+    if (r > LED_MAX_DUTY) r = LED_MAX_DUTY;
+    if (g > LED_MAX_DUTY) g = LED_MAX_DUTY;
+    if (b > LED_MAX_DUTY) b = LED_MAX_DUTY;
+
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, r);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, g);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, b);
+
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
 }
 
-uint8_t led_get_player_number(void)
-{
-    return led_player_number;
-}
-
-
+// -------------------------------------------------------------
+// Boot-up sweep animation
+// -------------------------------------------------------------
 void led_boot_sweep(void)
 {
-    // Ensure all off first (active-low LEDs mean HIGH = off)
-    gpio_set_level(HEART_BEAT_RED,   HIGH);
-    gpio_set_level(HEART_BEAT_GREEN, HIGH);
-    gpio_set_level(HEART_BEAT_BLUE,  HIGH);
-
-    // Quick RGB sweep animation
-    gpio_set_level(HEART_BEAT_RED, LOW);   vTaskDelay(pdMS_TO_TICKS(200));
-    gpio_set_level(HEART_BEAT_RED, HIGH);
-    gpio_set_level(HEART_BEAT_GREEN, LOW); vTaskDelay(pdMS_TO_TICKS(200));
-    gpio_set_level(HEART_BEAT_GREEN, HIGH);
-    gpio_set_level(HEART_BEAT_BLUE, LOW);  vTaskDelay(pdMS_TO_TICKS(200));
-    gpio_set_level(HEART_BEAT_BLUE, HIGH);
-}
-
-
-// --------------------------------------------------------------------------
-// State control
-// --------------------------------------------------------------------------
-void led_set_state(led_state_t new_state)
-{
-    if (led_mutex && xSemaphoreTake(led_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-        current_led_state = new_state;
-        xSemaphoreGive(led_mutex);
+    //ESP_LOGI(TAG, "LED boot sweep start");
+    for (int i = 0; i <= LED_MAX_DUTY; i += 4) {
+        led_set_rgb(i, 0, 0);
+        vTaskDelay(pdMS_TO_TICKS(3));
     }
-}
-
-static led_state_t led_get_state(void)
-{
-    led_state_t state;
-    if (led_mutex && xSemaphoreTake(led_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-        state = current_led_state;
-        xSemaphoreGive(led_mutex);
-    } else {
-        state = current_led_state; // fallback
+    for (int i = 0; i <= LED_MAX_DUTY; i += 4) {
+        led_set_rgb(0, i, 0);
+        vTaskDelay(pdMS_TO_TICKS(3));
     }
-    return state;
+    for (int i = 0; i <= LED_MAX_DUTY; i += 4) {
+        led_set_rgb(0, 0, i);
+        vTaskDelay(pdMS_TO_TICKS(3));
+    }
+    led_set_rgb(0, 0, 0);
+    //ESP_LOGI(TAG, "LED boot sweep done");
 }
 
-// --------------------------------------------------------------------------
-// LED helper (turn all off)
-// --------------------------------------------------------------------------
-static inline void led_all_off(void)
-{
-    gpio_set_level(HEART_BEAT_RED, HIGH);
-    gpio_set_level(HEART_BEAT_GREEN, HIGH);
-    gpio_set_level(HEART_BEAT_BLUE, HIGH);
-}
-
-// --------------------------------------------------------------------------
-// Heartbeat / status task
-// --------------------------------------------------------------------------
+// -------------------------------------------------------------
+// Task for LED animation states
+// -------------------------------------------------------------
 void led_task(void *arg)
 {
-    while (1) {
+    bool on = false;
+    int fade = 0;
+    int dir = 1;
+
+    led_boot_sweep();
+
+    while (true) {
         switch (current_led_state) {
-            case LED_IDLE:
-                gpio_set_level(HEART_BEAT_BLUE, LOW);
-                vTaskDelay(pdMS_TO_TICKS(150));
-                gpio_set_level(HEART_BEAT_BLUE, HIGH);
-                vTaskDelay(pdMS_TO_TICKS(1250));
+            case LED_IDLE: // soft blue breathing
+                fade += dir * 4;
+                if (fade >= LED_MAX_DUTY) { fade = LED_MAX_DUTY; dir = -1; }
+                if (fade <= 0)             { fade = 0; dir = 1; }
+                led_set_rgb(0, 0, fade);
+                vTaskDelay(pdMS_TO_TICKS(16));
                 break;
 
-            case LED_PAIRING:
-                gpio_set_level(HEART_BEAT_RED, LOW);
-                gpio_set_level(HEART_BEAT_GREEN, LOW); // Amber
-                vTaskDelay(pdMS_TO_TICKS(300));
-                gpio_set_level(HEART_BEAT_RED, HIGH);
-                gpio_set_level(HEART_BEAT_GREEN, HIGH);
-                vTaskDelay(pdMS_TO_TICKS(300));
+            case LED_PAIRING: // fast blue blink
+                on = !on;
+                led_set_rgb(0, 0, on ? LED_MAX_DUTY : 0);
+                vTaskDelay(pdMS_TO_TICKS(250));
                 break;
 
-            case LED_CONNECTED:
-			{
-				uint8_t blink_count = led_player_number;
+            case LED_CONNECTED: // solid green
+                led_set_rgb(0, LED_MAX_DUTY, 0);
+                vTaskDelay(pdMS_TO_TICKS(500));
+                break;
 
-				for (uint8_t i = 0; i < blink_count; i++) {
-					// Green ON (active-low)
-					gpio_set_level(HEART_BEAT_GREEN, LOW);
-					vTaskDelay(pdMS_TO_TICKS(200));
+            case LED_ERROR: // red flash
+                on = !on;
+                led_set_rgb(on ? LED_MAX_DUTY : 0, 0, 0);
+                vTaskDelay(pdMS_TO_TICKS(200));
+                break;
 
-					// LED OFF
-					gpio_set_level(HEART_BEAT_GREEN, HIGH);
-					vTaskDelay(pdMS_TO_TICKS(200));
-				}
+            case LED_PLAYER_FLASH:
+                for (uint8_t i = 0; i < player_number; i++) {
+                    led_set_rgb(0, LED_MAX_DUTY, 0);
+                    vTaskDelay(pdMS_TO_TICKS(150));
+                    led_set_rgb(0, 0, 0);
+                    vTaskDelay(pdMS_TO_TICKS(150));
+                }
+                current_led_state = LED_CONNECTED;
+                break;
 
-
-				// Pause between blink cycles
-				vTaskDelay(pdMS_TO_TICKS(1000));
-				break;
-			}
-
-            case LED_ERROR:
-                gpio_set_level(HEART_BEAT_RED, LOW);
-                vTaskDelay(pdMS_TO_TICKS(800));
-                gpio_set_level(HEART_BEAT_RED, HIGH);
-                vTaskDelay(pdMS_TO_TICKS(800));
+            case LED_DISCONNECTED:
+            case LED_OFF:
+            default:
+                led_set_rgb(0, 0, 0);
+                vTaskDelay(pdMS_TO_TICKS(500));
                 break;
         }
     }
 }
 
+// -------------------------------------------------------------
+// Public API
+// -------------------------------------------------------------
+void led_init(void)
+{
+    led_reclaim_dac_pins();
+    led_hw_init();
+    xTaskCreatePinnedToCore(led_task, "led_task", 4096, NULL, 4, NULL, 0);
+}
 
+void led_set_state(led_state_t state)
+{
+    current_led_state = state;
+    //ESP_LOGI(TAG, "LED: state -> %d", state);
+}
 
+void led_set_player_number(uint8_t num)
+{
+    player_number = num;
+}
 
+uint8_t led_get_player_number(void)
+{
+    return player_number;
+}

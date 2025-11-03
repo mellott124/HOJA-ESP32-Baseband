@@ -187,8 +187,6 @@ static void restart_factory_reset(void)
 // --------------------------------------------------------------------------
 static void controller_task(void* arg)
 {
-    ESP_LOGI(TAG, "Monitoring SYNC pin (GPIO%d)", GPIO_BTN_SYNC);
-
     i2cinput_input_s input = {0};
 
     // Set initial LED to IDLE (slow blue pulse)
@@ -391,7 +389,7 @@ void app_main(void)
     gpio_input_init();
     led_init();
     led_boot_sweep(); // Boot animation
-    xTaskCreate(led_task, "led_task", 2048, NULL, 2, NULL);
+    //xTaskCreate(led_task, "led_task", 2048, NULL, 2, NULL);
     led_set_state(LED_IDLE);
 
     // --------------------------------------------------
