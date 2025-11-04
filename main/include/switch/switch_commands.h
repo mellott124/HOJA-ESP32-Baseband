@@ -3,6 +3,9 @@
 
 #include "hoja_includes.h"
 
+// Add this extern so other modules can query the active mode.
+extern input_mode_t get_current_mode(void);
+
 #define SW_OUT_ID_RUMBLE_CMD 0x01
 #define SW_OUT_ID_RUMBLE 0x10
 
@@ -38,6 +41,5 @@ void ns_report_setbattconn(uint8_t *buffer);
 void ns_report_sub_setdevinfo(uint8_t *buffer);
 void ns_report_sub_triggertime(uint8_t *buffer, uint16_t time_10_ms);
 void ns_report_bulkset(uint8_t *buffer, uint8_t start_idx, uint8_t* data, uint8_t len);
-
 
 #endif

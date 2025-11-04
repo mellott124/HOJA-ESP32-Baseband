@@ -57,6 +57,31 @@ static volatile bool _sniff = true;
 
 uint8_t _i2c_buffer_in[32];
 
+// --------------------------------------------------------------------------
+// MODE MANAGEMENT
+// --------------------------------------------------------------------------
+static input_mode_t current_mode = INPUT_MODE_N64;
+input_mode_t get_current_mode(void) { return current_mode; }
+
+// Boot-time mode selection using right D-pad (C cluster)
+static void select_boot_mode_from_right_dpad(void)
+{
+    bool c_left_pressed = (gpio_get_level(GPIO_BTN_C_L) == 0); // C-Left
+    bool c_up_pressed   = (gpio_get_level(GPIO_BTN_C_U) == 0); // C-Up
+
+    if (c_left_pressed) {
+        current_mode = INPUT_MODE_SWPRO;  // Pro Controller
+    } else if (c_up_pressed) {
+        current_mode = INPUT_MODE_SNES;   // SNES Controller
+    } else {
+        current_mode = INPUT_MODE_N64;    // Default
+    }
+
+    ESP_LOGI(TAG, "Selected mode: %s",
+        current_mode == INPUT_MODE_SWPRO ? "Pro Controller" :
+        current_mode == INPUT_MODE_SNES  ? "SNES Controller" :
+        "N64 Controller");
+}
 
 // --------------------------------------------------------------------------
 // NVS: SAVE / LOAD APPLICATION SETTINGS
@@ -137,34 +162,11 @@ static void gpio_input_init(void)
     c.mode=GPIO_MODE_INPUT;
     c.pull_up_en=GPIO_PULLUP_ENABLE;
     gpio_config(&c);
-
 }
 
 // --------------------------------------------------------------------------
 // RESTART BLUETOOTH PAIRING
 // --------------------------------------------------------------------------
-/* static void restart_bluetooth_pairing(void)
-{
-    ESP_LOGW(TAG, "Restarting for pairing (non-destructive)...");
-    bt_pairing = true; 
-    bt_connected = false; 
-    bt_error = false;
-
-    esp_read_mac(global_loaded_settings.device_mac_switch, ESP_MAC_BT);
-    sanitize_mac(global_loaded_settings.device_mac_switch);
-    memset(global_live_data.current_mac, 0, sizeof(global_live_data.current_mac));
-
-    led_set_state(LED_PAIRING);
-
-    esp_bluedroid_disable();
-    esp_bluedroid_deinit();
-    esp_bt_controller_disable();
-    esp_bt_controller_deinit();
-
-    vTaskDelay(pdMS_TO_TICKS(300));
-    esp_restart();
-} */
-
 static void restart_factory_reset(void)
 {
     ESP_LOGW(TAG, "Factory reset: clearing paired host...");
@@ -175,10 +177,9 @@ static void restart_factory_reset(void)
     memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
     app_settings_save();
 
-    led_set_state(LED_ERROR);  // Red flash for reset
+    led_set_state(LED_ERROR);  
     vTaskDelay(pdMS_TO_TICKS(400));
-    led_set_state(LED_PAIRING); // Amber after clear
-
+    led_set_state(LED_PAIRING); 
     esp_restart();
 }
 
@@ -188,138 +189,159 @@ static void restart_factory_reset(void)
 static void controller_task(void* arg)
 {
     i2cinput_input_s input = {0};
-
-    // Set initial LED to IDLE (slow blue pulse)
     led_set_state(LED_IDLE);
 
     while (true)
     {
-        // ------------------------------------------------------------------
-		// SYNC COMBO — L + R + C-Down (replaces physical SYNC pin)
-		// ------------------------------------------------------------------
-		static bool combo_active = false;
-		static int64_t combo_start_us = 0;
+        // =====================================================
+        // SYNC combo — L + R + C-Down
+        // =====================================================
+        static bool combo_active = false;
+        static int64_t combo_start_us = 0;
+        bool combo_now = (!gpio_get_level(GPIO_BTN_L) &&
+                          !gpio_get_level(GPIO_BTN_R) &&
+                          !gpio_get_level(GPIO_BTN_C_D));
+        int64_t now_us = esp_timer_get_time();
 
-		bool combo_now = (
-			!gpio_get_level(GPIO_BTN_L) &&    // L pressed
-			!gpio_get_level(GPIO_BTN_R) &&    // R pressed
-			!gpio_get_level(GPIO_BTN_C_D)     // C-Down pressed
-		);
+        if (combo_now && !combo_active) {
+            combo_active = true;
+            combo_start_us = now_us;
+            ESP_LOGI(TAG, "SYNC combo started");
+        }
 
-		int64_t now_us = esp_timer_get_time();
+        if (!combo_now && combo_active) {
+            combo_active = false;
+            int64_t held_ms = (now_us - combo_start_us) / 1000;
+            ESP_LOGI(TAG, "SYNC combo released after %lld ms", held_ms);
 
-		if (combo_now && !combo_active) {
-			combo_active = true;
-			combo_start_us = now_us;
-			ESP_LOGI(TAG, "SYNC combo (L+R+C-Down) started");
-		}
+            if (held_ms >= 3500) {
+                ESP_LOGW(TAG, "Long-press → factory reset");
+                led_set_state(LED_ERROR);
+                vTaskDelay(pdMS_TO_TICKS(250));
+                memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
+                app_settings_save();
+                esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+                led_set_state(LED_PAIRING);
+                vTaskDelay(pdMS_TO_TICKS(250));
+                restart_factory_reset();
+            } else if (held_ms >= 100) {
+                ESP_LOGI(TAG, "Short-press → reconnect");
+                led_set_state(LED_PAIRING);
+                vTaskDelay(pdMS_TO_TICKS(150));
+                esp_restart();
+            }
+        }
 
-		if (!combo_now && combo_active) {
-			combo_active = false;
-			int64_t held_ms = (now_us - combo_start_us) / 1000;
-			ESP_LOGI(TAG, "SYNC combo released after %lld ms", held_ms);
+        // =====================================================
+        // MAIN CONTROLLER MAPPING (base buttons per mode)
+        // =====================================================
+        switch (get_current_mode())
+        {
+            case INPUT_MODE_SWPRO:
+                input.button_east  = !gpio_get_level(GPIO_BTN_A);     // A
+                input.button_south = !gpio_get_level(GPIO_BTN_B);     // B
+                input.button_west  = !gpio_get_level(GPIO_BTN_C_U);   // X
+                input.button_north = !gpio_get_level(GPIO_BTN_C_L);   // Y
+                input.dpad_up      = !gpio_get_level(GPIO_BTN_DPAD_U);
+                input.dpad_down    = !gpio_get_level(GPIO_BTN_DPAD_D);
+                input.dpad_left    = !gpio_get_level(GPIO_BTN_DPAD_L);
+                input.dpad_right   = !gpio_get_level(GPIO_BTN_DPAD_R);
+                input.trigger_l    = !gpio_get_level(GPIO_BTN_L);
+                input.trigger_r    = !gpio_get_level(GPIO_BTN_R);
+                input.trigger_zl   = !gpio_get_level(GPIO_BTN_C_D);   // C-Down → ZL
+                input.trigger_zr   = !gpio_get_level(GPIO_BTN_C_R);   // C-Right → ZR
+                input.button_plus  = !gpio_get_level(GPIO_BTN_START); // Start → Plus
+                input.button_minus = !gpio_get_level(GPIO_BTN_SELECT);// Select → Minus
+                input.lx = 0x7FFF; input.ly = 0x7FFF;
+                input.rx = 0x7FFF; input.ry = 0x7FFF;
+                break;
 
-			if (held_ms >= 3500) {
-				// --- Long hold: full factory reset / re-pair ---
-				ESP_LOGW(TAG, "SYNC combo long-press → factory reset / pairing");
-				led_set_state(LED_ERROR);
-				vTaskDelay(pdMS_TO_TICKS(250));
+            case INPUT_MODE_SNES:
+                input.button_east  = !gpio_get_level(GPIO_BTN_A);     // A
+                input.button_south = !gpio_get_level(GPIO_BTN_B);     // B
+                input.button_west  = !gpio_get_level(GPIO_BTN_C_U);   // X
+                input.button_north = !gpio_get_level(GPIO_BTN_C_L);   // Y
+                input.dpad_up      = !gpio_get_level(GPIO_BTN_DPAD_U);
+                input.dpad_down    = !gpio_get_level(GPIO_BTN_DPAD_D);
+                input.dpad_left    = !gpio_get_level(GPIO_BTN_DPAD_L);
+                input.dpad_right   = !gpio_get_level(GPIO_BTN_DPAD_R);
+                input.trigger_l    = !gpio_get_level(GPIO_BTN_L);
+                input.trigger_r    = !gpio_get_level(GPIO_BTN_R);
+                input.button_plus  = !gpio_get_level(GPIO_BTN_START); // Start → Plus
+                input.button_minus = !gpio_get_level(GPIO_BTN_SELECT);// Select → Minus
+                input.trigger_zl   = false;
+                input.trigger_zr   = false;
+                input.lx = 0x7FFF; input.ly = 0x7FFF;
+                input.rx = 0x7FFF; input.ry = 0x7FFF;
+                break;
 
-				memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
-				app_settings_save();
+            case INPUT_MODE_N64:
+            default:
+                input.button_east      = !gpio_get_level(GPIO_BTN_A);
+                input.button_south     = !gpio_get_level(GPIO_BTN_B);
+                input.dpad_up          = !gpio_get_level(GPIO_BTN_DPAD_U);
+                input.dpad_down        = !gpio_get_level(GPIO_BTN_DPAD_D);
+                input.dpad_left        = !gpio_get_level(GPIO_BTN_DPAD_L);
+                input.dpad_right       = !gpio_get_level(GPIO_BTN_DPAD_R);
+                input.button_north     = !gpio_get_level(GPIO_BTN_C_L);
+                input.button_west      = !gpio_get_level(GPIO_BTN_C_U);
+                input.button_minus     = !gpio_get_level(GPIO_BTN_C_R);
+                input.trigger_zr       = !gpio_get_level(GPIO_BTN_C_D);
+                input.trigger_l        = !gpio_get_level(GPIO_BTN_L);
+                input.trigger_r        = !gpio_get_level(GPIO_BTN_R);
+                input.button_plus      = !gpio_get_level(GPIO_BTN_START);
+                input.lx = 0x7FFF; input.ly = 0x7FFF;
+                input.rx = 0x7FFF; input.ry = 0x7FFF;
+                break;
+        }
 
-				esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-				led_set_state(LED_PAIRING);
-				vTaskDelay(pdMS_TO_TICKS(250));
-
-				restart_factory_reset();
-			}
-			else if (held_ms >= 100) {
-				// --- Short hold: reconnect cycle ---
-				ESP_LOGI(TAG, "SYNC combo short-press → reconnect");
-				led_set_state(LED_PAIRING);
-				vTaskDelay(pdMS_TO_TICKS(150));
-				esp_restart();   // soft reboot to reconnect
-			}
-		}
-
-        // ------------------------------------------------------------------
-        // MAIN CONTROLLER BUTTON READS
-        // ------------------------------------------------------------------
-        input.button_east      = !gpio_get_level(GPIO_BTN_A);     // VB A  → Switch A
-        input.button_south     = !gpio_get_level(GPIO_BTN_B);     // VB B  → Switch B
-
-        input.dpad_up          = !gpio_get_level(GPIO_BTN_DPAD_U);
-        input.dpad_down        = !gpio_get_level(GPIO_BTN_DPAD_D);
-        input.dpad_left        = !gpio_get_level(GPIO_BTN_DPAD_L);
-        input.dpad_right       = !gpio_get_level(GPIO_BTN_DPAD_R);
-
-        input.button_north     = !gpio_get_level(GPIO_BTN_C_L);   // VB C-Left  → Switch Y
-        input.button_west      = !gpio_get_level(GPIO_BTN_C_U);   // VB C-Up    → Switch X
-        input.button_minus     = !gpio_get_level(GPIO_BTN_C_R);   // VB C-Right → Switch Minus
-        input.trigger_zr       = !gpio_get_level(GPIO_BTN_C_D);   // VB C-Down  → Switch ZR
-
-        input.trigger_l        = !gpio_get_level(GPIO_BTN_L);	  // VB C-Down  → Switch L
-        input.trigger_r        = !gpio_get_level(GPIO_BTN_R);	  // VB C-Down  → Switch R
-        input.button_plus      = !gpio_get_level(GPIO_BTN_START); // VB Start   → Switch Plus
-
-        // --- Center analog sticks (no movement yet) ---
-        input.lx = 0x7FFF;
-        input.ly = 0x7FFF;
-        input.rx = 0x7FFF;
-        input.ry = 0x7FFF;
-
-        // ------------------------------------------------------------------
-        // SELECT / COMBO BUTTON LOGIC
-        //   - Select alone  → ZR  (acts as Z)
-        //   - Select + L    → Home
-        //   - Select + R    → Capture
-        // ------------------------------------------------------------------
+        // =====================================================
+        // SELECT COMBOS (HOME / CAPTURE)
+        // =====================================================
         bool sel    = !gpio_get_level(GPIO_BTN_SELECT);
         bool trig_l = !gpio_get_level(GPIO_BTN_L);
         bool trig_r = !gpio_get_level(GPIO_BTN_R);
 
-        // clear virtual button flags each loop
         input.button_home    = false;
         input.button_capture = false;
-        input.button_stick_left     = false;
+        input.button_stick_left = false;
 
-        if (sel) {
-            if (trig_l) {
-                input.button_home = true;        // Select + L → Home
-                ESP_LOGI(TAG, "Select + L → HOME");
-            }
-            else if (trig_r) {
-                input.button_capture = true;     // Select + R → Capture
-                ESP_LOGI(TAG, "Select + R → CAPTURE");
-            }
-            else {
-                input.button_stick_left = true;  // Select alone → ZR (acts as Z)
-                ESP_LOGI(TAG, "Select → ZR");
-            }
+        // Home and Capture combos (active in all modes)
+        if (sel && trig_l) {
+            input.button_home = true;
+            ESP_LOGI(TAG, "Select + L → HOME");
+        } 
+        else if (sel && trig_r) {
+            input.button_capture = true;
+            ESP_LOGI(TAG, "Select + R → CAPTURE");
+        } 
+        else if (sel && get_current_mode() == INPUT_MODE_N64) {
+            // N64: legacy behavior (Select acts like ZR via stick-click bit)
+            input.button_stick_left = true;
+            ESP_LOGI(TAG, "Select → ZR (N64 mode)");
         }
-		
-		// ------------------------------------------------------------------
-        // SEND INPUT DATA TO SWITCH
-        // ------------------------------------------------------------------
-        switch_bt_sendinput(&input);
 
-        vTaskDelay(pdMS_TO_TICKS(8));  // ~125 Hz update rate
+        // =====================================================
+        // SEND FINAL INPUT REPORT
+        // =====================================================
+        switch_bt_sendinput(&input);
+        vTaskDelay(pdMS_TO_TICKS(8));  // ~125 Hz
     }
 }
 
+
 // --------------------------------------------------------------------------
-// HOJA CALLBACK STUBS
+// HOJA CALLBACK STUBS (unchanged)
 // --------------------------------------------------------------------------
 void app_set_connected_status(uint8_t s)
 {
     bt_connected = (s != 0);
     bt_pairing = !bt_connected;
     bt_error = false;
-
-    // Update LED player number (for connected blink pattern)
-    led_set_player_number(s);
+    led_set_player_number(s);  // this now triggers blink + solid
 }
+
+
 
 void app_set_standard_haptic(uint8_t l,uint8_t r){ (void)l; (void)r; }
 void app_set_sinput_haptic(uint8_t*d,uint8_t l){ (void)d; (void)l; }
@@ -328,38 +350,22 @@ void app_set_power_setting(i2c_power_code_t p){ (void)p; }
 void app_save_host_mac(input_mode_t m, uint8_t *a)
 {
     (void)m;
-
-    // Only save if MAC actually changed (to avoid NVS wear)
     if (memcmp(global_loaded_settings.paired_host_switch_mac, a, 6) != 0)
     {
         memcpy(global_loaded_settings.paired_host_switch_mac, a, 6);
         app_settings_save();
-        ESP_LOGI("MAIN", "Updated paired host MAC in NVS: %02X:%02X:%02X:%02X:%02X:%02X",
-                 a[0], a[1], a[2], a[3], a[4], a[5]);
-    }
-    else
-    {
-        ESP_LOGI("MAIN", "Paired host MAC unchanged, skipping NVS save.");
+        ESP_LOGI("MAIN", "Updated paired host MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                 a[0],a[1],a[2],a[3],a[4],a[5]);
     }
 }
-
-
-bool app_compare_mac(uint8_t*a,uint8_t*b){ 
-	return memcmp(a,b,6)==0; 
-}
+bool app_compare_mac(uint8_t*a,uint8_t*b){ return memcmp(a,b,6)==0; }
 
 uint64_t get_timestamp_ms(void){ return esp_timer_get_time()/1000ULL; }
 uint64_t get_timestamp_us(void){ return esp_timer_get_time(); }
 uint32_t get_timer_value(void){ return (uint32_t)esp_timer_get_time(); }
 
-void app_set_report_timer(uint64_t t){ 
-	_app_report_timer_us_default=t; 
-	if(!_sniff)_app_report_timer_us=_app_report_timer_us_default; 
-}
-
-uint64_t app_get_report_timer(void){ 
-	return _app_report_timer_us; 
-}
+void app_set_report_timer(uint64_t t){ _app_report_timer_us_default=t; if(!_sniff)_app_report_timer_us=_app_report_timer_us_default; }
+uint64_t app_get_report_timer(void){ return _app_report_timer_us; }
 
 // --------------------------------------------------------------------------
 // APP MAIN
@@ -367,57 +373,44 @@ uint64_t app_get_report_timer(void){
 void app_main(void)
 {
     ESP_LOGI(TAG, "System start");
+
     uint8_t mac[6];
     esp_err_t ret = esp_efuse_mac_get_default(mac);
     ESP_LOGI("MACCHECK", "esp_efuse_mac_get_default() returned %s", esp_err_to_name(ret));
     ESP_LOGI("MACCHECK", "Base MAC: %02X:%02X:%02X:%02X:%02X:%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-    // --------------------------------------------------
-    // 🧭 STEP 1: Initialize NVS
-    // --------------------------------------------------
     ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase();
         nvs_flash_init();
     }
 
-    // --------------------------------------------------
-    // 🟦 STEP 2: Initialize settings, GPIO, and LED early
-    // --------------------------------------------------
     app_settings_load();
     gpio_input_init();
     led_init();
-    led_boot_sweep(); // Boot animation
-    //xTaskCreate(led_task, "led_task", 2048, NULL, 2, NULL);
+    led_boot_sweep();
     led_set_state(LED_IDLE);
 
-    // --------------------------------------------------
-    // 🧩 STEP 3: Log and sanitize MAC
-    // --------------------------------------------------
-    ESP_LOGI(TAG, "Pre-BT global_live_data.current_mac %02X:%02X:%02X:%02X:%02X:%02X",
-             global_loaded_settings.device_mac_switch[0],
-             global_loaded_settings.device_mac_switch[1],
-             global_loaded_settings.device_mac_switch[2],
-             global_loaded_settings.device_mac_switch[3],
-             global_loaded_settings.device_mac_switch[4],
-             global_loaded_settings.device_mac_switch[5]);
+    // 🌈 Select mode before BT start
+    select_boot_mode_from_right_dpad();
 
-    // --------------------------------------------------
-    // 🟧 STEP 4: Apply correct base MAC before Bluetooth startup
-    // --------------------------------------------------
+    // Optional LED feedback per mode
+    switch (get_current_mode()) {
+        case INPUT_MODE_SWPRO: led_set_state(LED_PAIRING); break;   // Amber
+        case INPUT_MODE_SNES:  led_set_state(LED_CONNECTED); break; // Green
+        case INPUT_MODE_N64:
+        default:               led_set_state(LED_IDLE); break;      // Blue
+    }
+
     uint8_t base_mac[6];
-	esp_read_mac(base_mac, ESP_MAC_BT);
-	ESP_LOGI(TAG, "Applying base BT MAC: %02X:%02X:%02X:%02X:%02X:%02X",
-			 base_mac[0], base_mac[1], base_mac[2],
-			 base_mac[3], base_mac[4], base_mac[5]);
-	esp_base_mac_addr_set(base_mac);
+    esp_read_mac(base_mac, ESP_MAC_BT);
+    ESP_LOGI(TAG, "Applying base BT MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+             base_mac[0], base_mac[1], base_mac[2],
+             base_mac[3], base_mac[4], base_mac[5]);
+    esp_base_mac_addr_set(base_mac);
 
-
-    // --------------------------------------------------
-    // 🟪 STEP 5: Initialize Bluetooth core
-    // --------------------------------------------------
-	ESP_LOGI(TAG, "Stored paired host: %02X:%02X:%02X:%02X:%02X:%02X",
+    ESP_LOGI(TAG, "Stored paired host: %02X:%02X:%02X:%02X:%02X:%02X",
          global_loaded_settings.paired_host_switch_mac[0],
          global_loaded_settings.paired_host_switch_mac[1],
          global_loaded_settings.paired_host_switch_mac[2],
@@ -426,50 +419,23 @@ void app_main(void)
          global_loaded_settings.paired_host_switch_mac[5]);
 
     ESP_LOGI(TAG, "Switch BT Mode Init...");
+
+	// Log which Switch controller identity is being emulated
+	ESP_LOGI(TAG, "Emulating as: %s",
+    get_current_mode() == INPUT_MODE_SWPRO ? "Pro Controller" :
+    get_current_mode() == INPUT_MODE_SNES  ? "SNES Controller" :
+    get_current_mode() == INPUT_MODE_N64   ? "N64 Controller" : "Unknown");
+
     int bt_status = core_bt_switch_start();
+    if (bt_status == 1) led_set_state(LED_PAIRING);
+    else led_set_state(LED_ERROR);
 
-    if (bt_status == 1) {
-        led_set_state(LED_PAIRING);  // Amber = advertising/reconnecting
-    } else {
-        led_set_state(LED_ERROR);    // Red = failure
-    }
-
-    // --------------------------------------------------
-    // 🧾 STEP 6: Verify MAC post-start
-    // --------------------------------------------------
     esp_read_mac(global_live_data.current_mac, ESP_MAC_BT);
-    ESP_LOGI(TAG, "Refreshed BT MAC after core start: %02X:%02X:%02X:%02X:%02X:%02X",
-             global_live_data.current_mac[0],
-             global_live_data.current_mac[1],
-             global_live_data.current_mac[2],
-             global_live_data.current_mac[3],
-             global_live_data.current_mac[4],
-             global_live_data.current_mac[5]);
+    ESP_LOGI(TAG, "Post-start BT MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+             global_live_data.current_mac[0],global_live_data.current_mac[1],
+             global_live_data.current_mac[2],global_live_data.current_mac[3],
+             global_live_data.current_mac[4],global_live_data.current_mac[5]);
 
-    bool mac_zero = true;
-    for (int i = 0; i < 6; i++) {
-        if (global_live_data.current_mac[i] != 0x00) {
-            mac_zero = false;
-            break;
-        }
-    }
-    if (mac_zero) {
-        ESP_LOGW(TAG, "MAC still zero — refreshing from hardware again");
-        esp_read_mac(global_live_data.current_mac, ESP_MAC_BT);
-        ESP_LOGI(TAG, "Final MAC: %02X:%02X:%02X:%02X:%02X:%02X",
-                 global_live_data.current_mac[0],
-                 global_live_data.current_mac[1],
-                 global_live_data.current_mac[2],
-                 global_live_data.current_mac[3],
-                 global_live_data.current_mac[4],
-                 global_live_data.current_mac[5]);
-    }
-
-    // --------------------------------------------------
-    // 🕹️ STEP 7: Launch controller input task
-    // --------------------------------------------------
-    bt_pairing = true;  // initial pairing mode (used by LED state machine)
+    bt_pairing = true;
     xTaskCreatePinnedToCore(controller_task, "controller_task", 4096, NULL, 1, NULL, 1);
 }
-
-

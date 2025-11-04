@@ -5,6 +5,8 @@
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "driver/dac.h"
+#include "esp_timer.h"
+
 
 #define TAG "LED"
 
@@ -146,14 +148,23 @@ void led_task(void *arg)
                 break;
 
             case LED_PLAYER_FLASH:
-                for (uint8_t i = 0; i < player_number; i++) {
-                    led_set_rgb(0, LED_MAX_DUTY, 0);
-                    vTaskDelay(pdMS_TO_TICKS(150));
-                    led_set_rgb(0, 0, 0);
-                    vTaskDelay(pdMS_TO_TICKS(150));
-                }
-                current_led_state = LED_CONNECTED;
-                break;
+			{
+				// Continuous blink of player number forever
+				for (uint8_t i = 0; i < player_number; i++) {
+					led_set_rgb(0, LED_MAX_DUTY, 0);           // LED on (green)
+					vTaskDelay(pdMS_TO_TICKS(150));            // on duration
+					led_set_rgb(0, 0, 0);                      // off
+					vTaskDelay(pdMS_TO_TICKS(150));            // off duration
+				}
+
+				// pause between sets of flashes
+				vTaskDelay(pdMS_TO_TICKS(600));
+
+				// stay in LED_PLAYER_FLASH; do NOT change current_led_state
+				// the main LED loop will revisit this case again next cycle
+			}
+			break;
+
 
             case LED_DISCONNECTED:
             case LED_OFF:
@@ -184,7 +195,9 @@ void led_set_state(led_state_t state)
 void led_set_player_number(uint8_t num)
 {
     player_number = num;
+    current_led_state = LED_PLAYER_FLASH;  // trigger blink sequence
 }
+
 
 uint8_t led_get_player_number(void)
 {

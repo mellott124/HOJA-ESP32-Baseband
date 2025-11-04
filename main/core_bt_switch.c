@@ -5,7 +5,8 @@
 #include "freertos/task.h"
 #include "LED.h"           // Needed for led_all_off(), led_set_state(), LED_IDLE, etc.
 
-
+#include "hoja_includes.h"   // already used elsewhere
+extern input_mode_t get_current_mode(void);  // NEW: access selected controller type
 
 #define HID_PROD_NSPRO  0x2009
 #define HID_VEND_NSPRO  0x057E
