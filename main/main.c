@@ -257,23 +257,24 @@ static void controller_task(void* arg)
                 break;
 
             case INPUT_MODE_SNES:
-                input.button_east  = !gpio_get_level(GPIO_BTN_A);     // A
-                input.button_south = !gpio_get_level(GPIO_BTN_B);     // B
-                input.button_west  = !gpio_get_level(GPIO_BTN_C_U);   // X
-                input.button_north = !gpio_get_level(GPIO_BTN_C_L);   // Y
+                input.button_east  = !gpio_get_level(GPIO_BTN_C_R);   // SNES A (C-Right)
+                input.button_south = !gpio_get_level(GPIO_BTN_C_D);   // SNES B (C-Down)
+                input.button_west  = !gpio_get_level(GPIO_BTN_C_U);   // SNES X (C-Up)
+                input.button_north = !gpio_get_level(GPIO_BTN_C_L);   // SNES Y (C-Left)
                 input.dpad_up      = !gpio_get_level(GPIO_BTN_DPAD_U);
                 input.dpad_down    = !gpio_get_level(GPIO_BTN_DPAD_D);
                 input.dpad_left    = !gpio_get_level(GPIO_BTN_DPAD_L);
                 input.dpad_right   = !gpio_get_level(GPIO_BTN_DPAD_R);
                 input.trigger_l    = !gpio_get_level(GPIO_BTN_L);
                 input.trigger_r    = !gpio_get_level(GPIO_BTN_R);
-                input.button_plus  = !gpio_get_level(GPIO_BTN_START); // Start → Plus
-                input.button_minus = !gpio_get_level(GPIO_BTN_SELECT);// Select → Minus
+                input.button_plus  = !gpio_get_level(GPIO_BTN_A);     // VB A → Start → Plus
+                input.button_minus = !gpio_get_level(GPIO_BTN_B);     // VB B → Select → Minus
                 input.trigger_zl   = false;
                 input.trigger_zr   = false;
                 input.lx = 0x7FFF; input.ly = 0x7FFF;
                 input.rx = 0x7FFF; input.ry = 0x7FFF;
                 break;
+
 
             case INPUT_MODE_N64:
             default:
