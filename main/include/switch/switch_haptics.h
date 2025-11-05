@@ -1,6 +1,7 @@
 #ifndef SWITCH_HAPTICS_H
 #define SWITCH_HAPTICS_H
 #include "hoja_includes.h"
+#include "drv2605_esp.h"
 
 #define CLAMP(val, min, max) ((val) < (min) ? (min) : ((val) > (max) ? (max) : (val)))
 
@@ -74,10 +75,10 @@ typedef struct
             uint32_t high_select    : 1; // Whether 7-bit value is high or low
             uint32_t blank          : 1; // Always 1
             uint32_t freq_select    : 1; // Whether 7-bit value is freq or amp
-            uint32_t cmd_hi_2 : 5; // 5-bit amfm hi [2]
-            uint32_t cmd_lo_2 : 5; // 5-bit amfm lo [2]
-            uint32_t cmd_hi_1 : 5; // 5-bit amfm hi [1]
-            uint32_t cmd_lo_1 : 5; // 5-bit amfm lo [1]
+            uint32_t cmd_hi_2 		: 5; // 5-bit amfm hi [2]
+            uint32_t cmd_lo_2 		: 5; // 5-bit amfm lo [2]
+            uint32_t cmd_hi_1 		: 5; // 5-bit amfm hi [1]
+            uint32_t cmd_lo_1 		: 5; // 5-bit amfm lo [1]
             uint32_t xx_xx_0        : 7; // 7-bit am/fm lo/hi [0], denoted by freq_select and high_select bits
             uint32_t frame_count    : 2; // 1 frame
         } type4; // three7bit
@@ -85,5 +86,7 @@ typedef struct
 } __attribute__((packed)) SwitchHapticPacket_s;
 
 void haptics_rumble_translate(const uint8_t *data);
+void haptics_initialize_lookup_tables(void);
+void haptics_init(void);
 
 #endif

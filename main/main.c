@@ -21,6 +21,7 @@
 #include "hoja_types.h"
 #include "LED.h"
 #include "switch_haptics.h"
+#include "drv2605_esp.h"
 
 #define TAG "MAIN"
 #define HIGH 1
@@ -379,8 +380,8 @@ void app_set_sinput_haptic(uint8_t*d,uint8_t l){ (void)d; (void)l; }
 void app_set_switch_haptic(uint8_t *d)
 {
     if (!d) return;
-    ESP_LOGI("HAPTIC", "Rumble data received:");
-    ESP_LOG_BUFFER_HEX("HAPTIC", d, 8);
+    /* ESP_LOGI("HAPTIC", "Rumble data received:");
+    ESP_LOG_BUFFER_HEX("HAPTIC", d, 8); */
     haptics_rumble_translate(d);  // 
 }
 
@@ -426,6 +427,7 @@ void app_main(void)
 
     app_settings_load();
     gpio_input_init();
+	haptics_init();
     led_init();
     led_boot_sweep();
     led_set_state(LED_IDLE);

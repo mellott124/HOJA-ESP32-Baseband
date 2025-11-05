@@ -14,4 +14,5 @@ idf_component_register(SRCS "main.c" "mitch_i2c.c"
                             "imu_tool.c"
                             "interval.c"
 			    "LED.c"
+			    "drv2605_esp.c"
                     INCLUDE_DIRS "." "include" "include/switch")

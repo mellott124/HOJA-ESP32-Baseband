@@ -1,4 +1,10 @@
+#include "drv2605_esp.h"
 #include "switch_haptics.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+static const char *TAG = "HAPTIC";
 
 const float MinFrequency = -2.0f;
 const float MaxFrequency = 2.0f;
@@ -10,6 +16,8 @@ const float StartingAmplitude = -7.9375f;
 
 const float CenterFreqHigh = 320.0f;
 const float CenterFreqLow = 160.0f;
+
+static void haptic_stop_task(void *param);
 
 static inline float clampf(float val, float min, float max)
 {
@@ -129,7 +137,7 @@ float haptics_apply_command(Switch5BitAction_t action, float offset, float curre
 
 static bool _haptics_init = false;
 // Call this function to initialize all lookup tables
-void hatptics_initialize_lookup_tables(void)
+void haptics_initialize_lookup_tables(void)
 {
     initialize_exp_base2_lookup();
     initialize_rumble_amp_lookup();
@@ -410,39 +418,84 @@ void _haptics_decode_samples(const SwitchHapticPacket_s *encoded,
     };
 }
 
-// Translate and handle rumble
-// Big thanks to hexkyz for some info on Discord
+/**
+ * Translate Switch rumble packets to DRV2605 RTP output.
+ * Called whenever the Switch sends 8-byte rumble data.
+ */
 void haptics_rumble_translate(const uint8_t *data)
 {
-    if (!_haptics_init)
-    {
-        hatptics_initialize_lookup_tables();
-        _haptics_init = true;
+    if (!data) return;
+
+    static hoja_rumble_msg_s left = {0};
+    static hoja_rumble_msg_s right = {0};
+    static uint8_t last_amp = 0;
+
+    // Decode the left and right 4-byte haptic packets
+    _haptics_decode_samples((const SwitchHapticPacket_s *)data, &left);
+    _haptics_decode_samples((const SwitchHapticPacket_s *)&data[4], &right);
+
+    float amp_f_left  = left.samples[0].high_amplitude;
+    float amp_f_right = right.samples[0].high_amplitude;
+
+    // Scale up Switch amplitudes (~0–0.25 typical)
+    amp_f_left  *= 6.0f;
+    amp_f_right *= 6.0f;
+    if (amp_f_left  > 1.0f) amp_f_left  = 1.0f;
+    if (amp_f_right > 1.0f) amp_f_right = 1.0f;
+
+    uint8_t amp_left  = (uint8_t)(amp_f_left  * 127.0f);
+    uint8_t amp_right = (uint8_t)(amp_f_right * 127.0f);
+    uint8_t amp       = (amp_left + amp_right) / 2;
+
+    ESP_LOGI(TAG, "Decoded amp L=%.3f R=%.3f (RTP=%d)", amp_f_left, amp_f_right, amp);
+
+    // If the rumble signal is near zero, stop the motor
+    if (amp < 5) {
+        if (last_amp != 0) {
+            drv2605_set_rtp(0);
+            ESP_LOGI(TAG, "Stop rumble (low amp)");
+            last_amp = 0;
+        }
+        return;
     }
 
-    static hoja_rumble_msg_s internal_left = {0};
-    static hoja_rumble_msg_s internal_right = {0};
+    // Re-enter RTP mode (safe guard)
+    drv2605_write(DRV2605_REG_MODE, DRV2605_MODE_RTP);
+    drv2605_set_rtp(amp);
+    last_amp = amp;
 
-        // Decode left
-    _haptics_decode_samples((const SwitchHapticPacket_s *)data, &internal_left);
-    // Decode right
-    _haptics_decode_samples((const SwitchHapticPacket_s *)&(data[4]), &internal_right);
-
-    // --- Condensed debug logging (only when amplitude is non-zero) ---
-	hoja_haptic_frame_s *left = &internal_left.samples[0];
-	hoja_haptic_frame_s *right = &internal_right.samples[0];
-
-	// Log only if something actually rumbles
-	if ((left->high_amplitude > 0.01f) || (right->high_amplitude > 0.01f) ||
-		(left->low_amplitude > 0.01f) || (right->low_amplitude > 0.01f)) {
-		ESP_LOGI("HAPTIC", "Rumble: L_hi=%.2f L_lo=%.2f R_hi=%.2f R_lo=%.2f",
-				 left->high_amplitude, left->low_amplitude,
-				 right->high_amplitude, right->low_amplitude);
-	}
-
-
-    // Forward the data to the HOJA core
-    // if (internal_left.sample_count > 0)
-    //     cb_hoja_rumble_set(&internal_left, &internal_right);
+    // Start a short background task that turns off rumble after 200 ms
+    xTaskCreatePinnedToCore(
+        haptic_stop_task,
+        "haptic_stop_timer",
+        2048,
+        NULL,
+        1,
+        NULL,
+        tskNO_AFFINITY);
 }
+
+/**
+ * Task that waits briefly, then stops the rumble motor.
+ */
+static void haptic_stop_task(void *param)
+{
+    vTaskDelay(pdMS_TO_TICKS(200));   // 0.2 s rumble duration
+    drv2605_set_rtp(0);
+    ESP_LOGI("HAPTIC", "Auto-stop rumble (timeout)");
+    vTaskDelete(NULL);
+}
+
+void haptics_init(void)
+{
+    if (_haptics_init)
+        return;
+
+    ESP_LOGI("HAPTIC", "Initializing haptic subsystem...");
+    drv2605_init();
+    haptics_initialize_lookup_tables();
+    _haptics_init = true;
+}
+
+
 
