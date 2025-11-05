@@ -20,6 +20,7 @@
 #include "hoja_includes.h"
 #include "hoja_types.h"
 #include "LED.h"
+#include "switch_haptics.h"
 
 #define TAG "MAIN"
 #define HIGH 1
@@ -374,7 +375,15 @@ void app_set_connected_status(uint8_t s)
 
 void app_set_standard_haptic(uint8_t l,uint8_t r){ (void)l; (void)r; }
 void app_set_sinput_haptic(uint8_t*d,uint8_t l){ (void)d; (void)l; }
-void app_set_switch_haptic(uint8_t*d){ (void)d; }
+
+void app_set_switch_haptic(uint8_t *d)
+{
+    if (!d) return;
+    ESP_LOGI("HAPTIC", "Rumble data received:");
+    ESP_LOG_BUFFER_HEX("HAPTIC", d, 8);
+    haptics_rumble_translate(d);  // 
+}
+
 void app_set_power_setting(i2c_power_code_t p){ (void)p; }
 void app_save_host_mac(input_mode_t m, uint8_t *a)
 {

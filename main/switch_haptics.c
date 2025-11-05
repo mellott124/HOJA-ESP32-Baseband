@@ -423,12 +423,26 @@ void haptics_rumble_translate(const uint8_t *data)
     static hoja_rumble_msg_s internal_left = {0};
     static hoja_rumble_msg_s internal_right = {0};
 
-    // Decode left
+        // Decode left
     _haptics_decode_samples((const SwitchHapticPacket_s *)data, &internal_left);
     // Decode right
     _haptics_decode_samples((const SwitchHapticPacket_s *)&(data[4]), &internal_right);
 
+    // --- Condensed debug logging (only when amplitude is non-zero) ---
+	hoja_haptic_frame_s *left = &internal_left.samples[0];
+	hoja_haptic_frame_s *right = &internal_right.samples[0];
+
+	// Log only if something actually rumbles
+	if ((left->high_amplitude > 0.01f) || (right->high_amplitude > 0.01f) ||
+		(left->low_amplitude > 0.01f) || (right->low_amplitude > 0.01f)) {
+		ESP_LOGI("HAPTIC", "Rumble: L_hi=%.2f L_lo=%.2f R_hi=%.2f R_lo=%.2f",
+				 left->high_amplitude, left->low_amplitude,
+				 right->high_amplitude, right->low_amplitude);
+	}
+
+
     // Forward the data to the HOJA core
     // if (internal_left.sample_count > 0)
-        // cb_hoja_rumble_set(&internal_left, &internal_right);
+    //     cb_hoja_rumble_set(&internal_left, &internal_right);
 }
+
