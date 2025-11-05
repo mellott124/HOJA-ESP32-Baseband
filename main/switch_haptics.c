@@ -1,3 +1,51 @@
+/* =========================================================================================
+ *  HAPTICS SUBSYSTEM — RETROONYX VIRTUAL BOY WIRELESS CONTROLLER
+ *  -----------------------------------------------------------------------------------------
+ *  CURRENT IMPLEMENTATION (DRV2605L)
+ *
+ *  Overview:
+ *      This module provides real Nintendo Switch rumble support using a DRV2605L haptic driver.
+ *      Incoming vibration packets from the Switch are decoded and converted into RTP amplitude
+ *      commands over I²C. The current build supports single-channel output (Right haptic module)
+ *      and is ready for expansion to dual-channel DRV2625 hardware.
+ *
+ *  Data Flow:
+ *      Switch (BT HID)
+ *          ↓
+ *      ns_report_handler()
+ *          ↓
+ *      app_set_switch_haptic()
+ *          ↓
+ *      haptics_rumble_translate()
+ *          ↓
+ *      drv2605_set_rtp()  →  I²C  →  DRV2605L
+ *
+ *  Hardware Interface:
+ *      SDA     → IO21   (I²C Data)
+ *      SCL     → IO22   (I²C Clock)
+ *      GPIO_R  → IO19   (Right haptic enable/trigger)
+ *      GPIO_L  → TBD    (Left haptic enable/trigger, future DRV2625 support)
+ *
+ *  Current Behavior:
+ *      - Fully decodes and responds to Switch rumble packets.
+ *      - Haptics active in all controller modes (Pro, SNES, N64, etc.).
+ *      - Verified operation via Switch “Find Controllers” and trigger test events.
+ *      - No watchdog stalls or I²C contention.
+ *
+ *  Deferred / Future Work:
+ *      [ ] Add dual-channel support using DRV2625 (Left & Right haptics).
+ *      [ ] Implement GPIO_L enable logic and proper power gating.
+ *      [ ] Calibrate amplitude curves for LRA tuning on production hardware.
+ *      [ ] Optional: add RTP fade-out for smoother stop transitions.
+ *      [ ] Unify initialization via haptics_init() call.
+ *
+ *  Notes:
+ *      - DRV2605L is operating in RTP mode for real-time amplitude control.
+ *      - All Switch modes are left unfiltered to ensure consistent rumble behavior.
+ *      - Safe to run without haptic hardware connected; driver initialization will skip if not found.
+ * ========================================================================================= */
+
+
 #include "drv2605_esp.h"
 #include "switch_haptics.h"
 #include "esp_log.h"
@@ -447,13 +495,14 @@ void haptics_rumble_translate(const uint8_t *data)
     uint8_t amp_right = (uint8_t)(amp_f_right * 127.0f);
     uint8_t amp       = (amp_left + amp_right) / 2;
 
-    ESP_LOGI(TAG, "Decoded amp L=%.3f R=%.3f (RTP=%d)", amp_f_left, amp_f_right, amp);
+    if(amp>0)
+		ESP_LOGI(TAG, "Decoded amp L=%.3f R=%.3f (RTP=%d)", amp_f_left, amp_f_right, amp);
 
     // If the rumble signal is near zero, stop the motor
     if (amp < 5) {
         if (last_amp != 0) {
             drv2605_set_rtp(0);
-            ESP_LOGI(TAG, "Stop rumble (low amp)");
+            //ESP_LOGI(TAG, "Stop rumble (low amp)");
             last_amp = 0;
         }
         return;
@@ -482,7 +531,7 @@ static void haptic_stop_task(void *param)
 {
     vTaskDelay(pdMS_TO_TICKS(200));   // 0.2 s rumble duration
     drv2605_set_rtp(0);
-    ESP_LOGI("HAPTIC", "Auto-stop rumble (timeout)");
+    //ESP_LOGI("HAPTIC", "Auto-stop rumble (timeout)");
     vTaskDelete(NULL);
 }
 

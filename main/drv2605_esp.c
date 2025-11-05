@@ -91,9 +91,9 @@ esp_err_t drv2605_set_mode(uint8_t mode) {
 
 esp_err_t drv2605_set_rtp(uint8_t value) {
     esp_err_t err = drv2605_write(DRV2605_REG_RTPIN, value);
-    if (err == ESP_OK)
-        ESP_LOGI(TAG, "Set RTP strength=%d", value);
-    else
+    if (err == ESP_OK){
+        //ESP_LOGI(TAG, "Set RTP strength=%d", value);
+    }else
         ESP_LOGE(TAG, "RTP write failed: %s", esp_err_to_name(err));
     return err;
 }
