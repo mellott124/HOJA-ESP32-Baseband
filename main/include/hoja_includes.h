@@ -59,6 +59,7 @@ typedef enum
     INPUT_MODE_N64      = 4,
     INPUT_MODE_SNES     = 5,
     INPUT_MODE_SINPUT   = 6,
+	INPUT_MODE_NES      = 7,
     INPUT_MODE_MAX,
 } input_mode_t;
 
