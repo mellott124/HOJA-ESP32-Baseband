@@ -5,6 +5,7 @@
 
 idf_component_register(SRCS "main.c" "mitch_i2c.c" 
                             "core_bt_switch.c" "core_bt_sinput.c"
+			    "core_bt_xinput.c"
                             "esp_hid_gap.c" 
                             "util_bt_hid.c" 
                             "switch_analog.c"

@@ -16,6 +16,7 @@
 #include "esp_bt_main.h"
 #include "hoja.h"
 #include "core_bt_switch.h"
+#include "core_bt_xinput.h"
 #include "esp_gap_bt_api.h"
 #include "hoja_includes.h"
 #include "hoja_types.h"
@@ -80,6 +81,8 @@ static void select_boot_mode_from_right_dpad(void)
     } else if (c_up_pressed) {
         current_mode = INPUT_MODE_SNES;    // Right D-Pad Up → SNES Controller
     } else if (c_down_pressed) {
+        current_mode = INPUT_MODE_XINPUT;     // Right D-Pad Down → XInput
+    } else if (c_right_pressed) {
         current_mode = INPUT_MODE_NES;     // Right D-Pad Down → NES Controller
     } else {
         current_mode = INPUT_MODE_N64;     // Default → N64 Controller
@@ -291,7 +294,6 @@ static void controller_task(void* arg)
 				input.rx = 0x7FFF; input.ry = 0x7FFF;
 				break;
 
-				
 			case INPUT_MODE_NES:
                 input.button_east  = !gpio_get_level(GPIO_BTN_A);     // A
                 input.button_south = !gpio_get_level(GPIO_BTN_B);     // B
@@ -308,6 +310,23 @@ static void controller_task(void* arg)
                 input.lx = 0x7FFF; input.ly = 0x7FFF;
                 input.rx = 0x7FFF; input.ry = 0x7FFF;
                 break;
+			
+			case INPUT_MODE_XINPUT:
+				input.button_east  = !gpio_get_level(GPIO_BTN_A);     // A
+				input.button_south = !gpio_get_level(GPIO_BTN_B);     // B
+				input.button_west  = !gpio_get_level(GPIO_BTN_C_L);   // X
+				input.button_north = !gpio_get_level(GPIO_BTN_C_U);   // Y
+				input.dpad_up      = !gpio_get_level(GPIO_BTN_DPAD_U);
+				input.dpad_down    = !gpio_get_level(GPIO_BTN_DPAD_D);
+				input.dpad_left    = !gpio_get_level(GPIO_BTN_DPAD_L);
+				input.dpad_right   = !gpio_get_level(GPIO_BTN_DPAD_R);
+				input.trigger_l    = !gpio_get_level(GPIO_BTN_L);
+				input.trigger_r    = !gpio_get_level(GPIO_BTN_R);
+				input.button_plus  = !gpio_get_level(GPIO_BTN_START);  // Start
+				input.button_minus = !gpio_get_level(GPIO_BTN_SELECT); // Select
+				input.lx = 0x7FFF; input.ly = 0x7FFF;
+				input.rx = 0x7FFF; input.ry = 0x7FFF;
+				break;
 
             case INPUT_MODE_N64:
             default:
@@ -356,10 +375,15 @@ static void controller_task(void* arg)
         }
 
         // =====================================================
-        // SEND FINAL INPUT REPORT
-        // =====================================================
-        switch_bt_sendinput(&input);
-        vTaskDelay(pdMS_TO_TICKS(8));  // ~125 Hz
+		// SEND FINAL INPUT REPORT
+		// =====================================================
+		if (get_current_mode() == INPUT_MODE_XINPUT)
+			xinput_bt_sendinput(&input);
+		else
+			switch_bt_sendinput(&input);
+
+		vTaskDelay(pdMS_TO_TICKS(8));  // ~125 Hz
+
     }
 }
 
@@ -440,6 +464,7 @@ void app_main(void)
 		case INPUT_MODE_SWPRO: led_set_state(LED_PAIRING); break;   // Amber
 		case INPUT_MODE_SNES:  led_set_state(LED_CONNECTED); break; // Green
 		case INPUT_MODE_NES:   led_set_state(LED_CONNECTED); break; // Green (same as SNES)
+		case INPUT_MODE_XINPUT: led_set_state(LED_XINPUT); break;   // Purple
 		case INPUT_MODE_N64:
 		default:               led_set_state(LED_IDLE); break;      // Blue
 	}
@@ -468,9 +493,25 @@ void app_main(void)
     get_current_mode() == INPUT_MODE_NES   ? "NES Controller" :
     get_current_mode() == INPUT_MODE_N64   ? "N64 Controller" : "Unknown");
 
-    int bt_status = core_bt_switch_start();
-    if (bt_status == 1) led_set_state(LED_PAIRING);
-    else led_set_state(LED_ERROR);
+    int bt_status = 0;
+	switch (get_current_mode()) {
+		case INPUT_MODE_XINPUT:
+			ESP_LOGI(TAG, "Starting XInput mode...");
+			bt_status = core_bt_xinput_start();
+			break;
+
+		case INPUT_MODE_SWPRO:
+		case INPUT_MODE_SNES:
+		case INPUT_MODE_NES:
+		case INPUT_MODE_N64:
+		default:
+			ESP_LOGI(TAG, "Starting Switch mode...");
+			bt_status = core_bt_switch_start();
+			break;
+	}
+
+	if (bt_status == ESP_OK) led_set_state(LED_PAIRING);
+	else led_set_state(LED_ERROR);
 
     esp_read_mac(global_live_data.current_mac, ESP_MAC_BT);
     ESP_LOGI(TAG, "Post-start BT MAC: %02X:%02X:%02X:%02X:%02X:%02X",
