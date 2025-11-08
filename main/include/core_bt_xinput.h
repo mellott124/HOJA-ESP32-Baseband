@@ -7,12 +7,6 @@
 // DEFINES
 // ============================================================
 
-#define XI_HID_LEN           16
-#define XI_INPUT_REPORT_ID   0x01
-#define HID_PROD_XINPUT 0x0B13
-#define HID_VEND_XINPUT 0x045E
-#define XINPUT_HID_REPORT_MAP_LEN 334
-
 // ============================================================
 // STRUCTURES
 // ============================================================
@@ -37,21 +31,30 @@ typedef struct
 } __attribute__((packed)) xi_input_s;
 
 // ============================================================
+// EXTERNAL DECLARATIONS
+// ============================================================
+
+// From core_bt_xinput.c
+extern util_bt_app_params_s xinput_app_params;
+extern esp_hid_device_config_t xinput_hidd_config;
+
+// ============================================================
 // FUNCTION PROTOTYPES
 // ============================================================
 
 // Core Bluetooth lifecycle
 esp_err_t core_bt_xinput_start(void);
-void core_bt_xinput_stop(void);
+void      core_bt_xinput_stop(void);
 
 // Send input (called from controller_task in main.c)
-void xinput_bt_sendinput(i2cinput_input_s *input);
+void      xinput_bt_sendinput(i2cinput_input_s *input);
+static void _xinput_bt_task_standard(void *parameters);
 
 // BLE callbacks
-void xinput_ble_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, void *event_data);
-void xinput_ble_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
+void      xinput_ble_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, void *event_data);
+void      xinput_ble_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
 
 // Optional status query
-bool xinput_is_connected(void);
+bool      xinput_is_connected(void);
 
 #endif // CORE_BT_XINPUT_H

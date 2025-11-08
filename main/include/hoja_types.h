@@ -94,23 +94,24 @@ typedef struct
 {
     uint16_t magic;
 
-    // Mac address of this device
-    // Used as a fallback only!
+    // Device MACs (one per controller personality)
     uint8_t device_mac_switch[6];
-
     uint8_t device_mac_depreciated[6];
-
-    // Used as a fallback only!
     uint8_t device_mac_sinput[6];
+    uint8_t device_mac_xinput[6]; // ✅ Restored for XInput
 
-    // Mac address of the Switch we are paired to
+    // Switch pairing info
     uint8_t paired_host_switch_mac[6];
+    bool has_paired_switch;
 
-    // DEPRECIATED
-    uint8_t paired_host_depreciated_mac[6];
-
-    // Mac address of the SInput we are paired to
+    // SInput pairing info
     uint8_t paired_host_sinput_mac[6];
+    bool has_paired_sinput;
+
+    // XInput pairing info
+    uint8_t paired_host_xinput_mac[6];
+    bool has_paired_xinput;
+
 } hoja_settings_s;
 
 typedef struct 

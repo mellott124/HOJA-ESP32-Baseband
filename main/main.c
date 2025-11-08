@@ -71,21 +71,21 @@ input_mode_t get_current_mode(void) { return current_mode; }
 // --------------------------------------------------------------------------
 static void select_boot_mode_from_right_dpad(void)
 {
-    bool c_left_pressed  = (gpio_get_level(GPIO_BTN_C_L) == 0); // C-Left
-    bool c_up_pressed    = (gpio_get_level(GPIO_BTN_C_U) == 0); // C-Up
-    bool c_down_pressed  = (gpio_get_level(GPIO_BTN_C_D) == 0); // C-Down
-    bool c_right_pressed = (gpio_get_level(GPIO_BTN_C_R) == 0); // C-Right (future XInput)
+    bool c_left_pressed  = (gpio_get_level(GPIO_BTN_C_L) == 0);
+    bool c_up_pressed    = (gpio_get_level(GPIO_BTN_C_U) == 0);
+    bool c_down_pressed  = (gpio_get_level(GPIO_BTN_C_D) == 0);
+    bool c_right_pressed = (gpio_get_level(GPIO_BTN_C_R) == 0);
 
     if (c_left_pressed) {
-        current_mode = INPUT_MODE_SWPRO;   // Right D-Pad Left → Pro Controller
+        current_mode = INPUT_MODE_SWPRO;   // Pro Controller
     } else if (c_up_pressed) {
-        current_mode = INPUT_MODE_SNES;    // Right D-Pad Up → SNES Controller
-    } else if (c_down_pressed) {
-        current_mode = INPUT_MODE_XINPUT;     // Right D-Pad Down → XInput
+        current_mode = INPUT_MODE_SNES;    // SNES Controller
     } else if (c_right_pressed) {
-        current_mode = INPUT_MODE_NES;     // Right D-Pad Down → NES Controller
+        current_mode = INPUT_MODE_NES;     // NES Controller
+    } else if (c_down_pressed) {
+        current_mode = INPUT_MODE_XINPUT;  // XInput Controller
     } else {
-        current_mode = INPUT_MODE_N64;     // Default → N64 Controller
+        current_mode = INPUT_MODE_N64;     // default
     }
 
     ESP_LOGI(TAG, "Selected mode: %s",
@@ -93,6 +93,7 @@ static void select_boot_mode_from_right_dpad(void)
         current_mode == INPUT_MODE_SNES  ? "SNES Controller" :
         current_mode == INPUT_MODE_NES   ? "NES Controller" :
         current_mode == INPUT_MODE_N64   ? "N64 Controller" :
+		current_mode == INPUT_MODE_XINPUT   ? "XInput Controller" :
         "Unknown");
 
     // Optional: visual LED feedback (e.g. blink pattern per mode)
@@ -119,29 +120,57 @@ void app_settings_save(void)
 void app_settings_load(void)
 {
     nvs_handle_t h;
-    esp_err_t e=nvs_open("hoja",NVS_READWRITE,&h);
-    if(e!=ESP_OK){
-        ESP_LOGW(TAG,"NVS open fail (load)");
-        memset(&global_loaded_settings,0,sizeof(global_loaded_settings));
-        global_loaded_settings.magic=HOJA_MAGIC_NUM;
+    esp_err_t e = nvs_open("hoja", NVS_READWRITE, &h);
+    if (e != ESP_OK) {
+        ESP_LOGW(TAG, "NVS open fail (load)");
+        memset(&global_loaded_settings, 0, sizeof(global_loaded_settings));
+        global_loaded_settings.magic = HOJA_MAGIC_NUM;
         return;
     }
-    size_t len=sizeof(global_loaded_settings);
-    e=nvs_get_blob(h,"settings",&global_loaded_settings,&len);
-    if(e!=ESP_OK){
-        ESP_LOGW(TAG,"No settings in NVS");
-        memset(&global_loaded_settings,0,sizeof(global_loaded_settings));
-        global_loaded_settings.magic=HOJA_MAGIC_NUM;
+
+    size_t len = sizeof(global_loaded_settings);
+    e = nvs_get_blob(h, "settings", &global_loaded_settings, &len);
+    if (e != ESP_OK) {
+        ESP_LOGW(TAG, "No settings in NVS");
+        memset(&global_loaded_settings, 0, sizeof(global_loaded_settings));
+        global_loaded_settings.magic = HOJA_MAGIC_NUM;
     }
     nvs_close(h);
 
-    if(global_loaded_settings.magic != HOJA_MAGIC_NUM) {
-        ESP_LOGW(TAG,"Settings invalid — restoring defaults");
-        memset(&global_loaded_settings,0,sizeof(global_loaded_settings));
-        global_loaded_settings.magic=HOJA_MAGIC_NUM;
+    // ---------------------------------------------------------------------
+    // 🧩 Ensure new pairing flags exist and are valid
+    // ---------------------------------------------------------------------
+    if (!global_loaded_settings.has_paired_switch &&
+        memcmp(global_loaded_settings.paired_host_switch_mac, "\0\0\0\0\0\0", 6) != 0) {
+        global_loaded_settings.has_paired_switch = true;
+    }
+    if (!global_loaded_settings.has_paired_xinput &&
+        memcmp(global_loaded_settings.paired_host_xinput_mac, "\0\0\0\0\0\0", 6) != 0) {
+        global_loaded_settings.has_paired_xinput = true;
+    }
+
+    // ---------------------------------------------------------------------
+    // 🧱 Initialize the new XInput device MAC if missing
+    // ---------------------------------------------------------------------
+    if (memcmp(global_loaded_settings.device_mac_xinput, "\0\0\0\0\0\0", 6) == 0) {
+        ESP_LOGI(TAG, "Generating independent XInput MAC from Switch MAC...");
+        memcpy(global_loaded_settings.device_mac_xinput,
+               global_loaded_settings.device_mac_switch, 6);
+        global_loaded_settings.device_mac_xinput[5] += 3;  // offset ensures unique identity
+        app_settings_save();
+    }
+
+    // ---------------------------------------------------------------------
+    // ⚙️ Validate struct magic and reset if needed
+    // ---------------------------------------------------------------------
+    if (global_loaded_settings.magic != HOJA_MAGIC_NUM) {
+        ESP_LOGW(TAG, "Settings invalid — restoring defaults");
+        memset(&global_loaded_settings, 0, sizeof(global_loaded_settings));
+        global_loaded_settings.magic = HOJA_MAGIC_NUM;
         app_settings_save();
     }
 }
+
 
 // --------------------------------------------------------------------------
 // ENSURE VALID BLUETOOTH MAC ADDRESS
