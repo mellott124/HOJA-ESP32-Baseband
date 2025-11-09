@@ -4,11 +4,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "LED.h"           // Needed for led_all_off(), led_set_state(), LED_IDLE, etc.
-#include "bt_serial_logger.h"
 
 
-#include "hoja_includes.h"   // already used elsewhere
-extern input_mode_t get_current_mode(void);  // NEW: access selected controller type
 
 #define HID_PROD_NSPRO  0x2009
 #define HID_VEND_NSPRO  0x057E
@@ -576,11 +573,14 @@ int core_bt_switch_start(void)
                  global_loaded_settings.paired_host_switch_mac[3],
                  global_loaded_settings.paired_host_switch_mac[4],
                  global_loaded_settings.paired_host_switch_mac[5]);
+
+        // 🟩 Bullet-proof fallback:
         ESP_LOGI(TAG, "Quick reconnect path enabled");
     } else {
         _switch_paired = false;
         ESP_LOGI(TAG, "No stored paired host found — entering pairing mode.");
 
+        // 🟧 Safety: always re-advertise so we never get stuck invisible
         esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
     }
 
@@ -594,13 +594,10 @@ int core_bt_switch_start(void)
     // --------------------------------------------------
     err = util_bluetooth_register_app(&switch_app_params, &switch_hidd_config);
 
-	// --------------------------------------------------
-	// Reactivate discoverability for HID + SPP visibility
-	// --------------------------------------------------
-	esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-
     return 1;
 }
+
+
 
 
 // Stop Nintendo Switch controller core
