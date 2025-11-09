@@ -17,6 +17,7 @@ static const char *TAG = "BT_SERIAL_LOGGER";
 static uint32_t spp_handle = 0;
 static bool spp_connected = false;
 static SemaphoreHandle_t spp_mutex = NULL;
+static bool spp_ready = false;
 
 /* -------------------------------------------------------------------------- */
 /*  vprintf mirroring                                                         */
@@ -50,12 +51,13 @@ static void bt_serial_logger_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t
     switch (event) {
         case ESP_SPP_INIT_EVT:
             ESP_LOGI(TAG, "SPP initialized, delaying start to allow HID to pair...");
-            vTaskDelay(pdMS_TO_TICKS(2000));   // 🕒 give HID 2 s head start
+            vTaskDelay(pdMS_TO_TICKS(2000));   // allow HID to pair first
             esp_spp_start_srv(ESP_SPP_SEC_NONE, ESP_SPP_ROLE_SLAVE, 0, SPP_SERVER_NAME);
             break;
 
         case ESP_SPP_START_EVT:
             ESP_LOGI(TAG, "SPP server started as '%s'", SPP_SERVER_NAME);
+            spp_ready = true;
             break;
 
         case ESP_SPP_SRV_OPEN_EVT:
@@ -67,9 +69,28 @@ static void bt_serial_logger_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t
         case ESP_SPP_CLOSE_EVT:
             spp_connected = false;
             spp_handle = 0;
-            ESP_LOGW(TAG, "SPP connection closed. Restarting server after short delay...");
-            vTaskDelay(pdMS_TO_TICKS(1000));   // 🕒 let Windows clear COM port
-            esp_spp_start_srv(ESP_SPP_SEC_NONE, ESP_SPP_ROLE_SLAVE, 0, SPP_SERVER_NAME);
+            ESP_LOGW(TAG, "SPP connection closed. Restarting server after clean teardown...");
+
+            esp_spp_deinit();
+            spp_ready = true;
+
+            // Wait for SPP_UNINIT_EVT to signal full teardown
+            int wait_ms = 0;
+            while (spp_ready && wait_ms < 2000) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+                wait_ms += 100;
+            }
+
+            // Give Windows more time to release the COM port
+            vTaskDelay(pdMS_TO_TICKS(1000));
+
+            ESP_LOGI(TAG, "Reinitializing SPP after disconnect...");
+            esp_spp_init(ESP_SPP_MODE_CB);
+            break;
+
+        case ESP_SPP_UNINIT_EVT:
+            ESP_LOGI(TAG, "SPP stack uninitialized.");
+            spp_ready = false;
             break;
 
         default:

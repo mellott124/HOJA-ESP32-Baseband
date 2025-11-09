@@ -548,14 +548,6 @@ int core_bt_switch_start(void)
     esp_err_t ret;
     int err;
 
-    // --------------------------------------------------
-    // 🧹 TEMP: Force fresh pairing mode (clears stored host)
-    // --------------------------------------------------
-    ESP_LOGW("PAIRING", "⚠️  Forcing controller to forget stored host and re-enter pairing mode");
-    memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
-    _switch_paired = false;
-    esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-
     // Convert calibration data
     switch_analog_calibration_init();
 
@@ -601,19 +593,6 @@ int core_bt_switch_start(void)
     // Register HID application
     // --------------------------------------------------
     err = util_bluetooth_register_app(&switch_app_params, &switch_hidd_config);
-	
-	// --------------------------------------------------
-	// Start Bluetooth serial logger AFTER HID app is up
-	// --------------------------------------------------
-	vTaskDelay(pdMS_TO_TICKS(1000));  // let HID settle
-	ESP_LOGI("core_bt_switch_start", "Starting Bluetooth serial logger...");
-	bt_serial_logger_init();
-
-	// --------------------------------------------------
-	// Redirect ESP_LOG output to SPP
-	// --------------------------------------------------
-	bt_serial_logger_redirect_esp_log();
-	//ESP_LOGI(TAG, "ESP_LOG redirected to SPP output");
 
 	// --------------------------------------------------
 	// Reactivate discoverability for HID + SPP visibility

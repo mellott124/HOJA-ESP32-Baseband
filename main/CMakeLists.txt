@@ -20,7 +20,7 @@ idf_component_register(
         "interval.c"
         "LED.c"
         "drv2605_esp.c"
-        "bt_serial_logger.c"
+        #"bt_serial_logger.c"
     INCLUDE_DIRS
         "."
         "include"
