@@ -19,17 +19,19 @@ static bool spp_connected = false;
 static SemaphoreHandle_t spp_mutex = NULL;
 
 /* -------------------------------------------------------------------------- */
-/*  vprintf mirroring function                                                 */
+/*  vprintf mirroring                                                         */
 /* -------------------------------------------------------------------------- */
 int bt_serial_logger_vprintf(const char *fmt, va_list args)
 {
     static char buffer[512];
+    va_list copy;
+    va_copy(copy, args);
     int len = vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
 
-    // Output to UART
-    vprintf(fmt, args);
+    vprintf(fmt, copy);      // normal UART log output
+    va_end(copy);
 
-    // Output to SPP if connected
     if (spp_connected && spp_handle) {
         if (xSemaphoreTake(spp_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
             esp_spp_write(spp_handle, len, (uint8_t *)buffer);
@@ -47,7 +49,8 @@ static void bt_serial_logger_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t
 {
     switch (event) {
         case ESP_SPP_INIT_EVT:
-            ESP_LOGI(TAG, "SPP initialized, starting server...");
+            ESP_LOGI(TAG, "SPP initialized, delaying start to allow HID to pair...");
+            vTaskDelay(pdMS_TO_TICKS(2000));   // 🕒 give HID 2 s head start
             esp_spp_start_srv(ESP_SPP_SEC_NONE, ESP_SPP_ROLE_SLAVE, 0, SPP_SERVER_NAME);
             break;
 
@@ -64,7 +67,8 @@ static void bt_serial_logger_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t
         case ESP_SPP_CLOSE_EVT:
             spp_connected = false;
             spp_handle = 0;
-            ESP_LOGI(TAG, "SPP connection closed.");
+            ESP_LOGW(TAG, "SPP connection closed. Restarting server after short delay...");
+            vTaskDelay(pdMS_TO_TICKS(1000));   // 🕒 let Windows clear COM port
             esp_spp_start_srv(ESP_SPP_SEC_NONE, ESP_SPP_ROLE_SLAVE, 0, SPP_SERVER_NAME);
             break;
 
@@ -101,21 +105,8 @@ esp_err_t bt_serial_logger_init(void)
         return ret;
     }
 
-    ESP_LOGI(TAG, "SPP server started, waiting for connection...");
+    ESP_LOGI(TAG, "SPP server registered — waiting for initialization...");
     return ESP_OK;
-}
-
-void bt_serial_logger_restart(void)
-{
-    ESP_LOGW(TAG, "Restarting SPP logger...");
-    esp_spp_deinit();
-    vTaskDelay(pdMS_TO_TICKS(100));
-    esp_spp_init(ESP_SPP_MODE_CB);
-}
-
-bool bt_serial_logger_is_connected(void)
-{
-    return spp_connected;
 }
 
 void bt_serial_logger_redirect_esp_log(void)
