@@ -23,6 +23,7 @@
 #include "LED.h"
 #include "switch_haptics.h"
 #include "drv2605_esp.h"
+#include "bt_serial_logger.h"
 
 #define TAG "MAIN"
 #define HIGH 1
@@ -539,8 +540,12 @@ void app_main(void)
 			break;
 	}
 
-	if (bt_status == ESP_OK) led_set_state(LED_PAIRING);
-	else led_set_state(LED_ERROR);
+	if (bt_status == ESP_OK) {
+		led_set_state(LED_PAIRING);
+	} else {
+		led_set_state(LED_ERROR);
+	}
+
 
     esp_read_mac(global_live_data.current_mac, ESP_MAC_BT);
     ESP_LOGI(TAG, "Post-start BT MAC: %02X:%02X:%02X:%02X:%02X:%02X",

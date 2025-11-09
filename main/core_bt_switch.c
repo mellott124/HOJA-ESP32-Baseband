@@ -4,6 +4,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "LED.h"           // Needed for led_all_off(), led_set_state(), LED_IDLE, etc.
+#include "bt_serial_logger.h"
+
 
 #include "hoja_includes.h"   // already used elsewhere
 extern input_mode_t get_current_mode(void);  // NEW: access selected controller type
@@ -546,6 +548,14 @@ int core_bt_switch_start(void)
     esp_err_t ret;
     int err;
 
+    // --------------------------------------------------
+    // 🧹 TEMP: Force fresh pairing mode (clears stored host)
+    // --------------------------------------------------
+    ESP_LOGW("PAIRING", "⚠️  Forcing controller to forget stored host and re-enter pairing mode");
+    memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
+    _switch_paired = false;
+    esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+
     // Convert calibration data
     switch_analog_calibration_init();
 
@@ -574,14 +584,11 @@ int core_bt_switch_start(void)
                  global_loaded_settings.paired_host_switch_mac[3],
                  global_loaded_settings.paired_host_switch_mac[4],
                  global_loaded_settings.paired_host_switch_mac[5]);
-
-        // 🟩 Bullet-proof fallback:
         ESP_LOGI(TAG, "Quick reconnect path enabled");
     } else {
         _switch_paired = false;
         ESP_LOGI(TAG, "No stored paired host found — entering pairing mode.");
 
-        // 🟧 Safety: always re-advertise so we never get stuck invisible
         esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
     }
 
@@ -594,11 +601,27 @@ int core_bt_switch_start(void)
     // Register HID application
     // --------------------------------------------------
     err = util_bluetooth_register_app(&switch_app_params, &switch_hidd_config);
+	
+	// --------------------------------------------------
+	// Start Bluetooth serial logger AFTER HID app is up
+	// --------------------------------------------------
+	vTaskDelay(pdMS_TO_TICKS(1000));  // let HID settle
+	ESP_LOGI("core_bt_switch_start", "Starting Bluetooth serial logger...");
+	bt_serial_logger_init();
+
+	// --------------------------------------------------
+	// Redirect ESP_LOG output to SPP
+	// --------------------------------------------------
+	bt_serial_logger_redirect_esp_log();
+	//ESP_LOGI(TAG, "ESP_LOG redirected to SPP output");
+
+	// --------------------------------------------------
+	// Reactivate discoverability for HID + SPP visibility
+	// --------------------------------------------------
+	esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
 
     return 1;
 }
-
-
 
 
 // Stop Nintendo Switch controller core
