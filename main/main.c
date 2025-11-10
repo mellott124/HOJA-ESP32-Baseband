@@ -440,17 +440,49 @@ void app_set_switch_haptic(uint8_t *d)
 }
 
 void app_set_power_setting(i2c_power_code_t p){ (void)p; }
+
 void app_save_host_mac(input_mode_t m, uint8_t *a)
 {
-    (void)m;
-    if (memcmp(global_loaded_settings.paired_host_switch_mac, a, 6) != 0)
+    if (!a) return;
+
+    bool changed = false;
+
+    switch (m)
     {
-        memcpy(global_loaded_settings.paired_host_switch_mac, a, 6);
+        case INPUT_MODE_XINPUT:
+            if (memcmp(global_loaded_settings.paired_host_xinput_mac, a, 6) != 0)
+            {
+                memcpy(global_loaded_settings.paired_host_xinput_mac, a, 6);
+                global_loaded_settings.has_paired_xinput = true;
+                changed = true;
+                ESP_LOGI("MAIN", "Updated paired XInput host MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                         a[0], a[1], a[2], a[3], a[4], a[5]);
+            }
+            break;
+
+        case INPUT_MODE_SWPRO:
+        case INPUT_MODE_SNES:
+        case INPUT_MODE_NES:
+        case INPUT_MODE_N64:
+        default:
+            if (memcmp(global_loaded_settings.paired_host_switch_mac, a, 6) != 0)
+            {
+                memcpy(global_loaded_settings.paired_host_switch_mac, a, 6);
+                global_loaded_settings.has_paired_switch = true;
+                changed = true;
+                ESP_LOGI("MAIN", "Updated paired Switch host MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                         a[0], a[1], a[2], a[3], a[4], a[5]);
+            }
+            break;
+    }
+
+    if (changed)
+    {
         app_settings_save();
-        ESP_LOGI("MAIN", "Updated paired host MAC: %02X:%02X:%02X:%02X:%02X:%02X",
-                 a[0],a[1],a[2],a[3],a[4],a[5]);
     }
 }
+
+
 bool app_compare_mac(uint8_t*a,uint8_t*b){ return memcmp(a,b,6)==0; }
 
 uint64_t get_timestamp_ms(void){ return esp_timer_get_time()/1000ULL; }

@@ -10,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
+#include "XboxDescriptors.h"
 
 // -----------------------------------------------------------------------------
 // GLOBALS
@@ -18,8 +19,6 @@ static const char *TAG = "core_bt_xinput";
 static volatile bool _hid_connected = false;
 static volatile bool _xinput_paired = false;
 
-#define HID_VEND_XINPUT  0x045E   // Microsoft
-#define HID_PROD_XINPUT  0x028E   // Xbox 360 Controller
 #define DEFAULT_US_DELAY (8*1000)
 #define DEFAULT_TICK_DELAY (8/portTICK_PERIOD_MS)
 
@@ -44,53 +43,10 @@ static void xinput_pairing_task(void *arg)
 }
 
 // -----------------------------------------------------------------------------
-// Working OpenController HID Descriptor for Xbox 360 gamepad (Classic BT)
-// -----------------------------------------------------------------------------
-// -----------------------------------------------------------------------------
-// Xbox 360 Classic HID Descriptor (52-byte reports)
-// -----------------------------------------------------------------------------
-static const uint8_t xinput_hid_descriptor[] = {
-    0x05, 0x01,        // Usage Page (Generic Desktop)
-    0x09, 0x05,        // Usage (Game Pad)
-    0xA1, 0x01,        // Collection (Application)
-    0xA1, 0x00,        //   Collection (Physical)
-    0x05, 0x09,        //     Usage Page (Button)
-    0x19, 0x01,        //     Usage Minimum (Button 1)
-    0x29, 0x10,        //     Usage Maximum (Button 16)
-    0x15, 0x00,        //     Logical Minimum (0)
-    0x25, 0x01,        //     Logical Maximum (1)
-    0x75, 0x01,        //     Report Size (1)
-    0x95, 0x10,        //     Report Count (16)
-    0x81, 0x02,        //     Input (Data,Var,Abs)
-    0x05, 0x01,        //     Usage Page (Generic Desktop)
-    0x09, 0x30,        //     Usage (X)
-    0x09, 0x31,        //     Usage (Y)
-    0x09, 0x33,        //     Usage (Rx)
-    0x09, 0x34,        //     Usage (Ry)
-    0x16, 0x00, 0x80,  //     Logical Minimum (-32768)
-    0x26, 0xFF, 0x7F,  //     Logical Maximum (32767)
-    0x75, 0x10,        //     Report Size (16)
-    0x95, 0x04,        //     Report Count (4)
-    0x81, 0x02,        //     Input (Data,Var,Abs)
-    0x05, 0x02,        //     Usage Page (Simulation Controls)
-    0x09, 0xC4,        //     Usage (Accelerator/Left Trigger)
-    0x09, 0xC5,        //     Usage (Brake/Right Trigger)
-    0x15, 0x00,        //     Logical Minimum (0)
-    0x26, 0xFF, 0x00,  //     Logical Maximum (255)
-    0x75, 0x08,        //     Report Size (8)
-    0x95, 0x02,        //     Report Count (2)
-    0x81, 0x02,        //     Input (Data,Var,Abs)
-    0xC0,              //   End Collection
-    0xC0               // End Collection
-};
-
-#define XINPUT_HID_REPORT_MAP_LEN sizeof(xinput_hid_descriptor)
-
-// -----------------------------------------------------------------------------
 // Report map + app config
 // -----------------------------------------------------------------------------
 esp_hid_raw_report_map_t xinput_report_maps[1] = {
-    {.data = xinput_hid_descriptor, .len = (uint16_t)XINPUT_HID_REPORT_MAP_LEN}
+    {.data = XboxOneS_1708_HIDDescriptor, .len = sizeof(XboxOneS_1708_HIDDescriptor)}
 };
 
 // Bluetooth App setup data
@@ -102,14 +58,19 @@ util_bt_app_params_s xinput_app_params = {
 };
 
 // HID device config (matches Xbox 360 controller identity)
+static esp_hid_raw_report_map_t xinput_report_map = {
+    .data = XboxOneS_1708_HIDDescriptor,
+    .len  = sizeof(XboxOneS_1708_HIDDescriptor)
+};
+
 esp_hid_device_config_t xinput_hidd_config = {
-    .vendor_id          = HID_VEND_XINPUT,
-    .product_id         = HID_PROD_XINPUT,
-    .version            = 0x0100,
-    .device_name        = "Virtual Boy Controller",
-    .manufacturer_name  = "RetroOnyx",
-    .serial_number      = "000000",
-    .report_maps        = xinput_report_maps,
+    .vendor_id          = XBOX_VENDOR_ID,          // 0x045E
+    .product_id         = XBOX_1708_PRODUCT_ID,    // 0x02FD
+    .version            = XBOX_1708_BCD_DEVICE_ID, // 0x0408
+    .device_name        = "Xbox Wireless Controller",
+    .manufacturer_name  = "Microsoft",
+    .serial_number      = XBOX_1708_SERIAL,
+    .report_maps        = &xinput_report_map,
     .report_maps_len    = 1,
 };
 
@@ -236,8 +197,16 @@ static void xinput_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t
             break;
 
         case ESP_HIDD_OUTPUT_EVENT:
-            ESP_LOGI(TAG, "Output report received (rumble/LEDs)");
-            break;
+		ESP_LOGI(TAG, "Output report (rumble)");
+		if (param->output.length >= 8) {
+			const uint8_t *data = param->output.data;
+			uint8_t left_motor  = data[3];
+			uint8_t right_motor = data[4];
+			//haptics_rumble_translate(data);
+			ESP_LOGI(TAG, "Rumble L=%d R=%d", left_motor, right_motor);
+		}
+			break;
+
 
         case ESP_HIDD_STOP_EVENT:
             ESP_LOGI(TAG, "HID stop");
@@ -284,7 +253,7 @@ esp_err_t core_bt_xinput_start(void)
 	esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
 
 	// --- Enforce persistent identity for Windows re-pairing ---
-	esp_bt_gap_set_device_name("Virtual Boy Controller");
+	esp_bt_gap_set_device_name("Xbox Wireless Controller");
 
 	esp_bt_cod_t cod = {
 		.major = ESP_BT_COD_MAJOR_DEV_PERIPHERAL,
@@ -337,44 +306,74 @@ void xinput_bt_sendinput(i2cinput_input_s *input)
 {
     if (!_hid_connected) return;
 
-    uint8_t report[12] = {0};
+    uint8_t  report[12] = {0};
     uint16_t buttons = 0;
 
-    // --- Buttons (16 bits) ---
-    buttons |= (input->button_south ? (1 << 0) : 0);  // A
-    buttons |= (input->button_east  ? (1 << 1) : 0);  // B
-    buttons |= (input->button_west  ? (1 << 2) : 0);  // X
-    buttons |= (input->button_north ? (1 << 3) : 0);  // Y
-    buttons |= (input->button_minus ? (1 << 4) : 0);  // Select
-    buttons |= (input->button_plus  ? (1 << 5) : 0);  // Start
-    buttons |= (input->button_home  ? (1 << 6) : 0);  // Home
-    buttons |= (input->button_capture ? (1 << 7) : 0); // Capture
-    buttons |= (input->dpad_up    ? (1 << 8)  : 0);
-    buttons |= (input->dpad_down  ? (1 << 9)  : 0);
-    buttons |= (input->dpad_left  ? (1 << 10) : 0);
-    buttons |= (input->dpad_right ? (1 << 11) : 0);
+    // --------------------------------------------------------
+    // BUTTON BITS — aligned with official Xbox 360 HID layout
+    // --------------------------------------------------------
+    // Bit positions (LSB first):
+    //  0  DPAD_UP
+    //  1  DPAD_DOWN
+    //  2  DPAD_LEFT
+    //  3  DPAD_RIGHT
+    //  4  START
+    //  5  BACK (SELECT)
+    //  6  L3 (unused)
+    //  7  R3 (unused)
+    //  8  LB
+    //  9  RB
+    // 10  GUIDE (Home)
+    // 11  Reserved
+    // 12  A
+    // 13  B
+    // 14  X
+    // 15  Y
+    buttons |= (input->dpad_up    ? (1 << 0)  : 0);
+    buttons |= (input->dpad_down  ? (1 << 1)  : 0);
+    buttons |= (input->dpad_left  ? (1 << 2)  : 0);
+    buttons |= (input->dpad_right ? (1 << 3)  : 0);
+    buttons |= (input->button_plus   ? (1 << 4)  : 0); // START
+    buttons |= (input->button_minus  ? (1 << 5)  : 0); // BACK
+    buttons |= (input->trigger_l     ? (1 << 8)  : 0); // LB
+    buttons |= (input->trigger_r     ? (1 << 9)  : 0); // RB
+    buttons |= (input->button_home   ? (1 << 10) : 0); // GUIDE / HOME
+    buttons |= (input->button_south  ? (1 << 12) : 0); // A
+    buttons |= (input->button_east   ? (1 << 13) : 0); // B
+    buttons |= (input->button_west   ? (1 << 14) : 0); // X
+    buttons |= (input->button_north  ? (1 << 15) : 0); // Y
 
     report[0] = buttons & 0xFF;
     report[1] = (buttons >> 8) & 0xFF;
 
-    // --- Sticks (16-bit) ---
-    int16_t lx = input->lx;
-    int16_t ly = input->ly;
-    int16_t rx = input->rx;
-    int16_t ry = input->ry;
+    // --------------------------------------------------------
+    // STICKS (signed 16-bit, little endian)
+    // Xbox expects 0x0000 center, ±32767 full range
+    // --------------------------------------------------------
+    int16_t lx = input->lx - 0x7FFF;  // convert from 0..0xFFFF center to ±32767
+    int16_t ly = input->ly - 0x7FFF;
+    int16_t rx = input->rx - 0x7FFF;
+    int16_t ry = input->ry - 0x7FFF;
 
     memcpy(&report[2],  &lx, 2);
     memcpy(&report[4],  &ly, 2);
     memcpy(&report[6],  &rx, 2);
     memcpy(&report[8],  &ry, 2);
 
-    // --- Triggers (8-bit) ---
+    // --------------------------------------------------------
+    // TRIGGERS (8-bit, 0-255)
+    // --------------------------------------------------------
     report[10] = input->trigger_l ? 255 : 0;
     report[11] = input->trigger_r ? 255 : 0;
 
-    // --- Debug output ---
-    ESP_LOG_BUFFER_HEX_LEVEL("XInput OUT", report, sizeof(report), ESP_LOG_INFO);
+    // --------------------------------------------------------
+    // DEBUG
+    // --------------------------------------------------------
+    //ESP_LOG_BUFFER_HEX_LEVEL("XInput OUT", report, sizeof(report), ESP_LOG_INFO);
 
+    // --------------------------------------------------------
+    // TRANSMIT
+    // --------------------------------------------------------
     esp_bt_hid_device_send_report(
         ESP_HIDD_REPORT_TYPE_INTRDATA,
         0x00,  // Report ID
@@ -382,9 +381,6 @@ void xinput_bt_sendinput(i2cinput_input_s *input)
         report
     );
 }
-
-
-
 
 // -----------------------------------------------------------------------------
 // Background send loop task
