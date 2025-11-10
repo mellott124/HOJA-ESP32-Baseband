@@ -64,7 +64,7 @@ uint8_t _i2c_buffer_in[32];
 // --------------------------------------------------------------------------
 // MODE MANAGEMENT
 // --------------------------------------------------------------------------
-static input_mode_t current_mode = INPUT_MODE_N64;
+static input_mode_t current_mode = INPUT_MODE_XINPUT;
 input_mode_t get_current_mode(void) { return current_mode; }
 
 // --------------------------------------------------------------------------
@@ -519,7 +519,7 @@ void app_main(void)
     led_set_state(LED_IDLE);
 
     // 🌈 Select mode before BT start
-    select_boot_mode_from_right_dpad();
+    //select_boot_mode_from_right_dpad();
 
     // Optional LED feedback per mode
 	switch (get_current_mode()) {
