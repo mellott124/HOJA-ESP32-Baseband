@@ -168,75 +168,42 @@ static const uint8_t XboxOneS_1914_HIDDescriptor[]=
 
 
 // Descriptor adapted from:
-// -----------------------------------------------------------------------------
-// Xbox One S (1708) HID Descriptor – Compatible with Windows XInput via BT
-// -----------------------------------------------------------------------------
+    // https://github.com/DJm00n/ControllersInfo/blob/master/xboxone/xboxone_model_1708_bluetooth_hid_report_descriptor.txt
+// Xbox One S Bluetooth HID descriptor (Model 1708)
 static const uint8_t XboxOneS_1708_HIDDescriptor[] = {
-    0x05, 0x01,                    // Usage Page (Generic Desktop)
-    0x09, 0x05,                    // Usage (Game Pad)
-    0xA1, 0x01,                    // Collection (Application)
-
-    // D-Pad
-    0x05, 0x01,                    //   Usage Page (Generic Desktop)
-    0x09, 0x39,                    //   Usage (Hat switch)
-    0x15, 0x00,                    //   Logical Minimum (0)
-    0x25, 0x07,                    //   Logical Maximum (7)
-    0x35, 0x00,                    //   Physical Minimum (0)
-    0x46, 0x3B, 0x01,              //   Physical Maximum (315)
-    0x65, 0x14,                    //   Unit (Eng Rot:Angular Pos)
-    0x75, 0x04,                    //   Report Size (4)
-    0x95, 0x01,                    //   Report Count (1)
-    0x81, 0x42,                    //   Input (Data,Var,Abs,Null)
-    0x75, 0x04,                    //   Report Size (4)
-    0x95, 0x01,                    //   Report Count (1)
-    0x81, 0x03,                    //   Input (Const,Var,Abs)
-
-    // Buttons (A,B,X,Y,LB,RB,View,Menu)
-    0x05, 0x09,                    //   Usage Page (Button)
-    0x19, 0x01,                    //   Usage Minimum (Button 1)
-    0x29, 0x08,                    //   Usage Maximum (Button 8)
-    0x15, 0x00,                    //   Logical Minimum (0)
-    0x25, 0x01,                    //   Logical Maximum (1)
-    0x75, 0x01,                    //   Report Size (1)
-    0x95, 0x08,                    //   Report Count (8)
-    0x81, 0x02,                    //   Input (Data,Var,Abs)
-
-    // Triggers (LT, RT)
-    0x05, 0x02,                    //   Usage Page (Simulation Controls)
-    0x09, 0xC5,                    //   Usage (Brake)
-    0x09, 0xC4,                    //   Usage (Accelerator)
-    0x15, 0x00,                    //   Logical Minimum (0)
-    0x26, 0xFF, 0x00,              //   Logical Maximum (255)
-    0x75, 0x08,                    //   Report Size (8)
-    0x95, 0x02,                    //   Report Count (2)
-    0x81, 0x02,                    //   Input (Data,Var,Abs)
-
-    // Sticks
-    0x05, 0x01,                    //   Usage Page (Generic Desktop)
-    0x09, 0x30,                    //   Usage (X)
-    0x09, 0x31,                    //   Usage (Y)
-    0x09, 0x33,                    //   Usage (Rx)
-    0x09, 0x34,                    //   Usage (Ry)
-    0x15, 0x00,                    //   Logical Minimum (0)
-    0x26, 0xFF, 0x00,              //   Logical Maximum (255)
-    0x75, 0x08,                    //   Report Size (8)
-    0x95, 0x04,                    //   Report Count (4)
-    0x81, 0x02,                    //   Input (Data,Var,Abs)
-
-    // Vendor Reserved for rumble and LEDs
-    0x06, 0x00, 0xFF,              //   Usage Page (Vendor Defined)
-    0x09, 0x20,                    //   Usage (0x20)
+    0x05, 0x01,       // Usage Page (Generic Desktop)
+    0x09, 0x05,       // Usage (Gamepad)
+    0xA1, 0x01,       // Collection (Application)
+    0x85, 0x01,       //   Report ID (1)
+    0x09, 0x30,       //   Usage (X)
+    0x09, 0x31,       //   Usage (Y)
+    0x09, 0x32,       //   Usage (Z)
+    0x09, 0x35,       //   Usage (Rz)
+    0x15, 0x00,       //   Logical Minimum (0)
+    0x26, 0xFF, 0x00, //   Logical Maximum (255)
+    0x75, 0x08,       //   Report Size (8)
+    0x95, 0x04,       //   Report Count (4)
+    0x81, 0x02,       //   Input (Data,Var,Abs)
+    0x05, 0x09,       //   Usage Page (Button)
+    0x19, 0x01,       //   Usage Minimum (Button 1)
+    0x29, 0x0A,       //   Usage Maximum (Button 10)
+    0x15, 0x00,       //   Logical Minimum (0)
+    0x25, 0x01,       //   Logical Maximum (1)
+    0x75, 0x01,       //   Report Size (1)
+    0x95, 0x0A,       //   Report Count (10)
+    0x81, 0x02,       //   Input (Data,Var,Abs)
+    0x75, 0x06,       //   Report Size (6)
+    0x95, 0x01,       //   Report Count (1)
+    0x81, 0x03,       //   Input (Const,Var,Abs)
+    0x05, 0x01,       //   Usage Page (Generic Desktop)
+    0x09, 0x33,       //   Usage (Rx)
+    0x09, 0x34,       //   Usage (Ry)
     0x15, 0x00,
     0x26, 0xFF, 0x00,
     0x75, 0x08,
-    0x95, 0x20,
-    0x81, 0x02,                    //   Input (Data,Var,Abs)
-    0x09, 0x21,                    //   Usage (0x21)
-    0x95, 0x20,
-    0x91, 0x02,                    //   Output (Data,Var,Abs)
-
-    0xC0                           // End Collection
+    0x95, 0x02,
+    0x81, 0x02,
+    0xC0              // End Collection
 };
-
 
 #endif

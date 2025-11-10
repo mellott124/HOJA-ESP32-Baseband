@@ -12,10 +12,6 @@
 #include "driver/gpio.h"
 #include "XboxDescriptors.h"
 
-// --- Forward declarations for app_settings_* functions implemented in main.c ---
-void app_settings_load(void);
-void app_settings_save(void);
-
 // -----------------------------------------------------------------------------
 // GLOBALS
 // -----------------------------------------------------------------------------
@@ -68,13 +64,13 @@ static esp_hid_raw_report_map_t xinput_report_map = {
 };
 
 esp_hid_device_config_t xinput_hidd_config = {
-    .vendor_id          = XBOX_VENDOR_ID,           // 0x045E (Microsoft)
-    .product_id         = XBOX_1708_PRODUCT_ID,     // 0x02FD (Xbox Wireless Controller - BT)
-    .version            = XBOX_1708_BCD_DEVICE_ID,  // 0x0408
+    .vendor_id          = XBOX_VENDOR_ID,          // 0x045E
+    .product_id         = XBOX_1708_PRODUCT_ID,    // 0x02FD
+    .version            = XBOX_1708_BCD_DEVICE_ID, // 0x0408
     .device_name        = "Xbox Wireless Controller",
     .manufacturer_name  = "Microsoft",
     .serial_number      = XBOX_1708_SERIAL,
-    .report_maps        = xinput_report_maps,       // already points at XboxOneS_1708_HIDDescriptor
+    .report_maps        = &xinput_report_map,
     .report_maps_len    = 1,
 };
 
@@ -231,25 +227,6 @@ esp_err_t core_bt_xinput_start(void)
 {
     ESP_LOGI(TAG, "Starting XInput Classic BT HID mode...");
 
-    // --- TEMP: Force clear old Bluetooth bonds to enable fresh pairing ---
-    ESP_LOGW(TAG, "Clearing all stored Bluetooth bonds before starting...");
-
-    // Remove every bonded host from NVS
-    esp_bt_gap_remove_bond_device(NULL);
-
-    // Reset internal pairing flags
-    _xinput_paired = false;
-    _hid_connected = false;
-
-    // --- Force forget any stored host MAC from NVS ---
-    ESP_LOGW(TAG, "Clearing stored XInput host MAC to ensure new pairing session...");
-    memset(global_loaded_settings.paired_host_xinput_mac, 0, sizeof(global_loaded_settings.paired_host_xinput_mac));
-    global_loaded_settings.has_paired_xinput = false;
-    app_settings_save();
-
-    ESP_LOGI(TAG, "Bluetooth bonds and stored host info cleared. Device will start in discoverable mode.");
-
-    // --- Load and apply device MAC ---
     uint8_t tmpmac[6];
     memcpy(tmpmac, global_loaded_settings.device_mac_xinput, 6);
 
@@ -257,28 +234,39 @@ esp_err_t core_bt_xinput_start(void)
              tmpmac[0], tmpmac[1], tmpmac[2],
              tmpmac[3], tmpmac[4], tmpmac[5]);
 
-    // --- Skip all stored-host checks to force pairing ---
-    ESP_LOGI(TAG, "Forcing XInput into full pairing mode (no reconnect attempt).");
+    const uint8_t zero_mac[6] = {0};
 
-    // Release BLE memory and enable classic BT
-    esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
-    esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
+	if (global_loaded_settings.has_paired_xinput &&
+		memcmp(global_loaded_settings.paired_host_xinput_mac, zero_mac, 6) != 0)
+	{
+		ESP_LOGI(TAG, "Stored paired XInput host found");
+		_xinput_paired = true;
+	}
+	else
+	{
+		ESP_LOGI(TAG, "No stored XInput host — starting in pairing mode");
+		_xinput_paired = false;
+		// Do NOT clear has_paired_xinput or paired_host_xinput_mac here
+	}
 
-    // --- Set identity and appearance ---
-    esp_bt_gap_set_device_name("Xbox Wireless Controller");
+	esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
+	esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
 
-    esp_bt_cod_t cod = {
-        .major = ESP_BT_COD_MAJOR_DEV_PERIPHERAL,
-        .minor = 0x08,  // Joystick subclass
-        .service = ESP_BT_COD_SRVC_RENDERING
-    };
-    esp_bt_gap_set_cod(cod, ESP_BT_INIT_COD);
+	// --- Enforce persistent identity for Windows re-pairing ---
+	esp_bt_gap_set_device_name("Xbox Wireless Controller");
 
-    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_NONE;
-    esp_bt_gap_set_security_param(ESP_BT_SP_IOCAP_MODE, &iocap, sizeof(iocap));
+	esp_bt_cod_t cod = {
+		.major = ESP_BT_COD_MAJOR_DEV_PERIPHERAL,
+		.minor = 0x08,  // Joystick subclass
+		.service = ESP_BT_COD_SRVC_RENDERING
+	};
+	esp_bt_gap_set_cod(cod, ESP_BT_INIT_COD);
 
-    // --- Proceed with standard Bluetooth init ---
-    if (util_bluetooth_init(tmpmac) != 1)
+	esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_NONE;
+	esp_bt_gap_set_security_param(ESP_BT_SP_IOCAP_MODE, &iocap, sizeof(iocap));
+
+	// --- Proceed with standard Bluetooth init ---
+	if (util_bluetooth_init(tmpmac) != 1)
     {
         ESP_LOGE(TAG, "Bluetooth init failed");
         return ESP_FAIL;
@@ -295,10 +283,8 @@ esp_err_t core_bt_xinput_start(void)
 
     ESP_LOGI(TAG, "XInput Classic HID mode started successfully");
     led_set_state(LED_PAIRING);
-
     return ESP_OK;
 }
-
 
 // -----------------------------------------------------------------------------
 // Stop Classic HID app
@@ -318,56 +304,83 @@ static inline uint8_t to_u8(int16_t v)
 
 void xinput_bt_sendinput(i2cinput_input_s *input)
 {
-    if (!_hid_connected)
-        return;
+    if (!_hid_connected) return;
 
-    // Xbox 360 wireless HID input report — 0x30 header, total 47 bytes
-    uint8_t report[47] = {0};
-    report[0] = 0x30;  // Input report ID
-
-    // --- Buttons bitfield (2 bytes) ---
+    uint8_t  report[12] = {0};
     uint16_t buttons = 0;
-    if (input->button_south) buttons |= 0x1000; // A
-    if (input->button_east)  buttons |= 0x2000; // B
-    if (input->button_west)  buttons |= 0x4000; // X
-    if (input->button_north) buttons |= 0x8000; // Y
 
-    if (input->dpad_up)      buttons |= 0x0001;
-    if (input->dpad_down)    buttons |= 0x0002;
-    if (input->dpad_left)    buttons |= 0x0004;
-    if (input->dpad_right)   buttons |= 0x0008;
+    // --------------------------------------------------------
+    // BUTTON BITS — aligned with official Xbox 360 HID layout
+    // --------------------------------------------------------
+    // Bit positions (LSB first):
+    //  0  DPAD_UP
+    //  1  DPAD_DOWN
+    //  2  DPAD_LEFT
+    //  3  DPAD_RIGHT
+    //  4  START
+    //  5  BACK (SELECT)
+    //  6  L3 (unused)
+    //  7  R3 (unused)
+    //  8  LB
+    //  9  RB
+    // 10  GUIDE (Home)
+    // 11  Reserved
+    // 12  A
+    // 13  B
+    // 14  X
+    // 15  Y
+    buttons |= (input->dpad_up    ? (1 << 0)  : 0);
+    buttons |= (input->dpad_down  ? (1 << 1)  : 0);
+    buttons |= (input->dpad_left  ? (1 << 2)  : 0);
+    buttons |= (input->dpad_right ? (1 << 3)  : 0);
+    buttons |= (input->button_plus   ? (1 << 4)  : 0); // START
+    buttons |= (input->button_minus  ? (1 << 5)  : 0); // BACK
+    buttons |= (input->trigger_l     ? (1 << 8)  : 0); // LB
+    buttons |= (input->trigger_r     ? (1 << 9)  : 0); // RB
+    buttons |= (input->button_home   ? (1 << 10) : 0); // GUIDE / HOME
+    buttons |= (input->button_south  ? (1 << 12) : 0); // A
+    buttons |= (input->button_east   ? (1 << 13) : 0); // B
+    buttons |= (input->button_west   ? (1 << 14) : 0); // X
+    buttons |= (input->button_north  ? (1 << 15) : 0); // Y
 
-    if (input->button_stick_left)  buttons |= 0x0020;
-    if (input->button_stick_right) buttons |= 0x0040;
-    if (input->button_minus)       buttons |= 0x0010; // Back
-    if (input->button_plus)        buttons |= 0x0080; // Start
-    if (input->button_home)        buttons |= 0x0400; // Guide
-    if (input->trigger_l)          buttons |= 0x0100; // LB
-    if (input->trigger_r)          buttons |= 0x0200; // RB
+    report[0] = buttons & 0xFF;
+    report[1] = (buttons >> 8) & 0xFF;
 
-    report[1] = buttons & 0xFF;
-    report[2] = (buttons >> 8) & 0xFF;
+    // --------------------------------------------------------
+    // STICKS (signed 16-bit, little endian)
+    // Xbox expects 0x0000 center, ±32767 full range
+    // --------------------------------------------------------
+    int16_t lx = input->lx - 0x7FFF;  // convert from 0..0xFFFF center to ±32767
+    int16_t ly = input->ly - 0x7FFF;
+    int16_t rx = input->rx - 0x7FFF;
+    int16_t ry = input->ry - 0x7FFF;
 
-    // --- Triggers (analog) ---
-    report[3] = (uint8_t)(input->lt >> 8); // 0–255
-    report[4] = (uint8_t)(input->rt >> 8); // 0–255
+    memcpy(&report[2],  &lx, 2);
+    memcpy(&report[4],  &ly, 2);
+    memcpy(&report[6],  &rx, 2);
+    memcpy(&report[8],  &ry, 2);
 
-    // --- Sticks (16-bit LE) ---
-    report[5]  = input->lx & 0xFF;
-    report[6]  = (input->lx >> 8) & 0xFF;
-    report[7]  = input->ly & 0xFF;
-    report[8]  = (input->ly >> 8) & 0xFF;
-    report[9]  = input->rx & 0xFF;
-    report[10] = (input->rx >> 8) & 0xFF;
-    report[11] = input->ry & 0xFF;
-    report[12] = (input->ry >> 8) & 0xFF;
+    // --------------------------------------------------------
+    // TRIGGERS (8-bit, 0-255)
+    // --------------------------------------------------------
+    report[10] = input->trigger_l ? 255 : 0;
+    report[11] = input->trigger_r ? 255 : 0;
 
-    // Remaining bytes [13..46] stay zero unless needed for extensions or haptics
+    // --------------------------------------------------------
+    // DEBUG
+    // --------------------------------------------------------
+    //ESP_LOG_BUFFER_HEX_LEVEL("XInput OUT", report, sizeof(report), ESP_LOG_INFO);
 
-    // --- Send full 47-byte report ---
-    esp_bt_hid_device_send_report(ESP_HIDD_REPORT_TYPE_INPUT, 0x00, sizeof(report), report);
+    // --------------------------------------------------------
+    // TRANSMIT
+    // --------------------------------------------------------
+    esp_bt_hid_device_send_report(
+        ESP_HIDD_REPORT_TYPE_INTRDATA,
+        0x00,  // Report ID
+        sizeof(report),
+        report
+    );
 }
-
 
 // -----------------------------------------------------------------------------
 // Background send loop task
