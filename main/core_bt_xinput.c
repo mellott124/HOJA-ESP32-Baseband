@@ -306,86 +306,59 @@ void xinput_bt_sendinput(i2cinput_input_s *input)
 {
     uint8_t report[47] = {0};
 
-    // --- Xbox One S Bluetooth Input Report (0x30) ---
-    report[0] = 0x01;
+    report[0] = 0x30;   // Report ID (matches descriptor)
 
-    // ------------------------------------------------
-    //  Bytes 1–2: Button bitmask (matches 0x1708 layout)
-    // ------------------------------------------------
+    // --- Buttons (A,B,X,Y,LB,RB,View,Menu,Logo,DPAD) ---
     uint16_t buttons = 0;
+    if (input->button_south) buttons |= 0x0001; // A
+    if (input->button_east)  buttons |= 0x0002; // B
+    if (input->button_west)  buttons |= 0x0004; // X
+    if (input->button_north) buttons |= 0x0008; // Y
+    if (input->trigger_l)    buttons |= 0x0010; // LB
+    if (input->trigger_r)    buttons |= 0x0020; // RB
+    if (input->button_minus) buttons |= 0x0040; // View
+    if (input->button_plus)  buttons |= 0x0080; // Menu
+    if (input->button_home)  buttons |= 0x0400; // Xbox Logo
 
-    // Face buttons
-    if (input->button_south) buttons |= 0x1000;   // A
-    if (input->button_east)  buttons |= 0x2000;   // B
-    if (input->button_west)  buttons |= 0x4000;   // X
-    if (input->button_north) buttons |= 0x8000;   // Y
-
-    // Shoulder buttons
-    if (input->trigger_l)    buttons |= 0x0100;   // LB
-    if (input->trigger_r)    buttons |= 0x0200;   // RB
-
-    // Menu buttons
-    if (input->button_minus) buttons |= 0x0010;   // View / Back
-    if (input->button_plus)  buttons |= 0x0020;   // Menu / Start
-
-    // Stick buttons
-    if (input->button_stick_left)  buttons |= 0x0040;
-    if (input->button_stick_right) buttons |= 0x0080;
-
-    // D-Pad bits
-    if (input->dpad_up)    buttons |= 0x0001;
-    if (input->dpad_down)  buttons |= 0x0002;
-    if (input->dpad_left)  buttons |= 0x0004;
-    if (input->dpad_right) buttons |= 0x0008;
-
-    // Copy into packet
+    // Encode buttons into bytes 1–2
     report[1] = buttons & 0xFF;
     report[2] = (buttons >> 8) & 0xFF;
 
-    // ------------------------------------------------
-    //  Bytes 3–4: Triggers (LT / RT)
-    // ------------------------------------------------
-    report[3] = input->lt & 0xFF;  // Left trigger
-    report[4] = input->rt & 0xFF;  // Right trigger
+    // --- Triggers ---
+    report[3] = input->lt >> 8;  // LT (0–255)
+    report[4] = input->rt >> 8;  // RT (0–255)
 
-    // ------------------------------------------------
-    //  Bytes 5–8: Left Stick (LX, LY)
-    // ------------------------------------------------
-    uint16_t lx = input->lx;
-    uint16_t ly = input->ly;
-    report[5] = lx & 0xFF;
-    report[6] = lx >> 8;
-    report[7] = ly & 0xFF;
-    report[8] = ly >> 8;
+    // --- Left Stick ---
+    report[5] = input->lx & 0xFF;
+    report[6] = (input->lx >> 8) & 0xFF;
+    report[7] = input->ly & 0xFF;
+    report[8] = (input->ly >> 8) & 0xFF;
 
-    // ------------------------------------------------
-    //  Bytes 9–12: Right Stick (RX, RY)
-    // ------------------------------------------------
-    uint16_t rx = input->rx;
-    uint16_t ry = input->ry;
-    report[9]  = rx & 0xFF;
-    report[10] = rx >> 8;
-    report[11] = ry & 0xFF;
-    report[12] = ry >> 8;
+    // --- Right Stick ---
+    report[9]  = input->rx & 0xFF;
+    report[10] = (input->rx >> 8) & 0xFF;
+    report[11] = input->ry & 0xFF;
+    report[12] = (input->ry >> 8) & 0xFF;
 
-    // ------------------------------------------------
-    //  Remaining bytes (13–46): padding / status
-    // ------------------------------------------------
-    for (int i = 13; i < 47; i++)
-        report[i] = 0x00;
+    // --- D-Pad bits (hat-style) ---
+    uint8_t dpad = 0x08;
+    if (input->dpad_up)    dpad = 0x00;
+    if (input->dpad_up && input->dpad_right)  dpad = 0x01;
+    if (input->dpad_right) dpad = 0x02;
+    if (input->dpad_down && input->dpad_right) dpad = 0x03;
+    if (input->dpad_down)  dpad = 0x04;
+    if (input->dpad_down && input->dpad_left)  dpad = 0x05;
+    if (input->dpad_left)  dpad = 0x06;
+    if (input->dpad_up && input->dpad_left)    dpad = 0x07;
+    report[13] = dpad;
 
-    // ------------------------------------------------
-    //  Transmit report only if HID link is active
-    // ------------------------------------------------
-    if (_hid_connected) {
-        esp_bt_hid_device_send_report(
-            ESP_HIDD_REPORT_TYPE_INPUT,  // Report type
-            0,                           // Report ID (handled in data)
-            sizeof(report),              // Length
-            report                       // Data
-        );
-    }
+    // --- Rest zeros (rumble, sensor, etc.) ---
+
+    if (_hid_connected)
+        esp_bt_hid_device_send_report(ESP_HIDD_REPORT_TYPE_INPUT,
+                                      0x30, sizeof(report), report);
 }
+
 
 // -----------------------------------------------------------------------------
 // Background send loop task
