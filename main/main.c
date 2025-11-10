@@ -346,17 +346,24 @@ static void controller_task(void* arg)
 				input.button_south = !gpio_get_level(GPIO_BTN_B);     // B
 				input.button_west  = !gpio_get_level(GPIO_BTN_C_L);   // X
 				input.button_north = !gpio_get_level(GPIO_BTN_C_U);   // Y
+				// Dpad → dpad bits
 				input.dpad_up      = !gpio_get_level(GPIO_BTN_DPAD_U);
 				input.dpad_down    = !gpio_get_level(GPIO_BTN_DPAD_D);
 				input.dpad_left    = !gpio_get_level(GPIO_BTN_DPAD_L);
 				input.dpad_right   = !gpio_get_level(GPIO_BTN_DPAD_R);
-				input.trigger_l    = !gpio_get_level(GPIO_BTN_L);
-				input.trigger_r    = !gpio_get_level(GPIO_BTN_R);
-				input.button_plus  = !gpio_get_level(GPIO_BTN_START);  // Start
-				input.button_minus = !gpio_get_level(GPIO_BTN_SELECT); // Select
-				input.lx = 0x7FFF; input.ly = 0x7FFF;
-				input.rx = 0x7FFF; input.ry = 0x7FFF;
+				// Triggers → analog
+				input.lt = !gpio_get_level(GPIO_BTN_L) ? 0xFF : 0x00;
+				input.rt = !gpio_get_level(GPIO_BTN_R) ? 0xFF : 0x00;
+				// Map VB right dpad → right stick
+				input.rx = !gpio_get_level(GPIO_BTN_C_R) ? 0xFFFF : 0x7FFF;
+				input.ry = !gpio_get_level(GPIO_BTN_C_D) ? 0x0000 : 0x7FFF;
+				input.button_plus  = !gpio_get_level(GPIO_BTN_START);   // Start
+				input.button_minus = !gpio_get_level(GPIO_BTN_SELECT);  // Back
+				// Optional: emulate LB/RB via triggers or dedicated
+				input.trigger_l = !gpio_get_level(GPIO_BTN_L);
+				input.trigger_r = !gpio_get_level(GPIO_BTN_R);
 				break;
+
 
             case INPUT_MODE_N64:
             default:

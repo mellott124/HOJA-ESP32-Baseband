@@ -304,82 +304,87 @@ static inline uint8_t to_u8(int16_t v)
 
 void xinput_bt_sendinput(i2cinput_input_s *input)
 {
-    if (!_hid_connected) return;
+    uint8_t report[47] = {0};
 
-    uint8_t  report[12] = {0};
+    // --- Xbox One S Bluetooth Input Report (0x30) ---
+    report[0] = 0x01;
+
+    // ------------------------------------------------
+    //  Bytes 1–2: Button bitmask (matches 0x1708 layout)
+    // ------------------------------------------------
     uint16_t buttons = 0;
 
-    // --------------------------------------------------------
-    // BUTTON BITS — aligned with official Xbox 360 HID layout
-    // --------------------------------------------------------
-    // Bit positions (LSB first):
-    //  0  DPAD_UP
-    //  1  DPAD_DOWN
-    //  2  DPAD_LEFT
-    //  3  DPAD_RIGHT
-    //  4  START
-    //  5  BACK (SELECT)
-    //  6  L3 (unused)
-    //  7  R3 (unused)
-    //  8  LB
-    //  9  RB
-    // 10  GUIDE (Home)
-    // 11  Reserved
-    // 12  A
-    // 13  B
-    // 14  X
-    // 15  Y
-    buttons |= (input->dpad_up    ? (1 << 0)  : 0);
-    buttons |= (input->dpad_down  ? (1 << 1)  : 0);
-    buttons |= (input->dpad_left  ? (1 << 2)  : 0);
-    buttons |= (input->dpad_right ? (1 << 3)  : 0);
-    buttons |= (input->button_plus   ? (1 << 4)  : 0); // START
-    buttons |= (input->button_minus  ? (1 << 5)  : 0); // BACK
-    buttons |= (input->trigger_l     ? (1 << 8)  : 0); // LB
-    buttons |= (input->trigger_r     ? (1 << 9)  : 0); // RB
-    buttons |= (input->button_home   ? (1 << 10) : 0); // GUIDE / HOME
-    buttons |= (input->button_south  ? (1 << 12) : 0); // A
-    buttons |= (input->button_east   ? (1 << 13) : 0); // B
-    buttons |= (input->button_west   ? (1 << 14) : 0); // X
-    buttons |= (input->button_north  ? (1 << 15) : 0); // Y
+    // Face buttons
+    if (input->button_south) buttons |= 0x1000;   // A
+    if (input->button_east)  buttons |= 0x2000;   // B
+    if (input->button_west)  buttons |= 0x4000;   // X
+    if (input->button_north) buttons |= 0x8000;   // Y
 
-    report[0] = buttons & 0xFF;
-    report[1] = (buttons >> 8) & 0xFF;
+    // Shoulder buttons
+    if (input->trigger_l)    buttons |= 0x0100;   // LB
+    if (input->trigger_r)    buttons |= 0x0200;   // RB
 
-    // --------------------------------------------------------
-    // STICKS (signed 16-bit, little endian)
-    // Xbox expects 0x0000 center, ±32767 full range
-    // --------------------------------------------------------
-    int16_t lx = input->lx - 0x7FFF;  // convert from 0..0xFFFF center to ±32767
-    int16_t ly = input->ly - 0x7FFF;
-    int16_t rx = input->rx - 0x7FFF;
-    int16_t ry = input->ry - 0x7FFF;
+    // Menu buttons
+    if (input->button_minus) buttons |= 0x0010;   // View / Back
+    if (input->button_plus)  buttons |= 0x0020;   // Menu / Start
 
-    memcpy(&report[2],  &lx, 2);
-    memcpy(&report[4],  &ly, 2);
-    memcpy(&report[6],  &rx, 2);
-    memcpy(&report[8],  &ry, 2);
+    // Stick buttons
+    if (input->button_stick_left)  buttons |= 0x0040;
+    if (input->button_stick_right) buttons |= 0x0080;
 
-    // --------------------------------------------------------
-    // TRIGGERS (8-bit, 0-255)
-    // --------------------------------------------------------
-    report[10] = input->trigger_l ? 255 : 0;
-    report[11] = input->trigger_r ? 255 : 0;
+    // D-Pad bits
+    if (input->dpad_up)    buttons |= 0x0001;
+    if (input->dpad_down)  buttons |= 0x0002;
+    if (input->dpad_left)  buttons |= 0x0004;
+    if (input->dpad_right) buttons |= 0x0008;
 
-    // --------------------------------------------------------
-    // DEBUG
-    // --------------------------------------------------------
-    //ESP_LOG_BUFFER_HEX_LEVEL("XInput OUT", report, sizeof(report), ESP_LOG_INFO);
+    // Copy into packet
+    report[1] = buttons & 0xFF;
+    report[2] = (buttons >> 8) & 0xFF;
 
-    // --------------------------------------------------------
-    // TRANSMIT
-    // --------------------------------------------------------
-    esp_bt_hid_device_send_report(
-        ESP_HIDD_REPORT_TYPE_INTRDATA,
-        0x00,  // Report ID
-        sizeof(report),
-        report
-    );
+    // ------------------------------------------------
+    //  Bytes 3–4: Triggers (LT / RT)
+    // ------------------------------------------------
+    report[3] = input->lt & 0xFF;  // Left trigger
+    report[4] = input->rt & 0xFF;  // Right trigger
+
+    // ------------------------------------------------
+    //  Bytes 5–8: Left Stick (LX, LY)
+    // ------------------------------------------------
+    uint16_t lx = input->lx;
+    uint16_t ly = input->ly;
+    report[5] = lx & 0xFF;
+    report[6] = lx >> 8;
+    report[7] = ly & 0xFF;
+    report[8] = ly >> 8;
+
+    // ------------------------------------------------
+    //  Bytes 9–12: Right Stick (RX, RY)
+    // ------------------------------------------------
+    uint16_t rx = input->rx;
+    uint16_t ry = input->ry;
+    report[9]  = rx & 0xFF;
+    report[10] = rx >> 8;
+    report[11] = ry & 0xFF;
+    report[12] = ry >> 8;
+
+    // ------------------------------------------------
+    //  Remaining bytes (13–46): padding / status
+    // ------------------------------------------------
+    for (int i = 13; i < 47; i++)
+        report[i] = 0x00;
+
+    // ------------------------------------------------
+    //  Transmit report only if HID link is active
+    // ------------------------------------------------
+    if (_hid_connected) {
+        esp_bt_hid_device_send_report(
+            ESP_HIDD_REPORT_TYPE_INPUT,  // Report type
+            0,                           // Report ID (handled in data)
+            sizeof(report),              // Length
+            report                       // Data
+        );
+    }
 }
 
 // -----------------------------------------------------------------------------
