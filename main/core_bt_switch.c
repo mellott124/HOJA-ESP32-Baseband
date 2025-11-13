@@ -5,11 +5,25 @@
 #include "freertos/task.h"
 #include "LED.h"           // Needed for led_all_off(), led_set_state(), LED_IDLE, etc.
 
-
+/* HCI mode defenitions */
+#define HCI_MODE_ACTIVE                 0x00
+#define HCI_MODE_HOLD                   0x01
+#define HCI_MODE_SNIFF                  0x02
+#define HCI_MODE_PARK                   0x03
 
 #define HID_PROD_NSPRO  0x2009
 #define HID_VEND_NSPRO  0x057E
 #define PROCON_HID_REPORT_MAP_LEN 170
+#define DEFAULT_TICK_DELAY (8/portTICK_PERIOD_MS)
+#define DEFAULT_US_DELAY (8*1000)
+
+TaskHandle_t _switch_bt_task_handle = NULL;
+
+static volatile bool        _hid_connected = false;
+static volatile bool        _switch_paired = false;
+uint8_t _switch_imu_mode = 0x00;
+interval_s _ns_interval = {0};
+sw_input_s _switch_input_data = {.ls_x = 2047, .ls_y = 2047, .rs_x = 2047, .rs_y = 2047};
 
 const uint8_t procon_hid_descriptor[PROCON_HID_REPORT_MAP_LEN] = {
     0x05, 0x01,        // Usage Page (Generic Desktop Ctrls)
@@ -119,16 +133,31 @@ const uint8_t procon_hid_descriptor[PROCON_HID_REPORT_MAP_LEN] = {
     0xC0,        // End Collection
 };
 
-#define DEFAULT_TICK_DELAY (8/portTICK_PERIOD_MS)
-#define DEFAULT_US_DELAY (8*1000)
-static volatile bool        _hid_connected = false;
+// Switch HID report maps
+esp_hid_raw_report_map_t switch_report_maps[1] = {
+    {
+        .data = procon_hid_descriptor,
+        .len = (uint16_t)PROCON_HID_REPORT_MAP_LEN,
+    }};
 
-static volatile bool        _switch_paired = false;
-uint8_t _switch_imu_mode = 0x00;
+// Bluetooth App setup data
+util_bt_app_params_s switch_app_params = {
+    .hidd_cb = switch_bt_hidd_cb,
+    .gap_cb = switch_bt_gap_cb,
+    .bt_mode = ESP_BT_MODE_CLASSIC_BT,
+    .appearance = ESP_HID_APPEARANCE_GAMEPAD,
+};
 
-interval_s _ns_interval = {0};
-
-sw_input_s _switch_input_data = {.ls_x = 2047, .ls_y = 2047, .rs_x = 2047, .rs_y = 2047};
+esp_hid_device_config_t switch_hidd_config = {
+    .vendor_id = HID_VEND_NSPRO,
+    .product_id = HID_PROD_NSPRO,
+    .version = 0x0100,
+    .device_name = "Pro Controller",
+    .manufacturer_name = "Nintendo",
+    .serial_number = "000000",
+    .report_maps = switch_report_maps,
+    .report_maps_len = 1,
+};
 
 void ns_set_imu_mode(uint8_t mode)
 {
@@ -228,10 +257,7 @@ typedef enum
     NS_STATUS_RUNNING,
 } ns_core_status_t;
 
-TaskHandle_t _switch_bt_task_handle = NULL;
 ns_power_handle_t _switch_power_state = NS_POWER_AWAKE;
-
-
 void _switch_bt_task_standard(void *parameters);
 void _switch_bt_task_empty(void *parameters);
 void _switch_bt_task_short(void *parameters);
@@ -246,35 +272,6 @@ void switch_bt_end_task()
         _switch_bt_task_handle = NULL;
     }
 }
-
-
-// Unused
-void btsnd_hcic_sniff_mode_cb(bool sniff, uint16_t tx_lat, uint16_t rx_lat)
-{
-    // Ignore all of this for debug
-    return;
-    if(sniff)
-    {
-        //_sniff = true;
-        //_delay_time_us = rx_lat*1000;//_ns_interval_to_us(rx_lat);
-        printf("Delay (ms): %d\n", rx_lat);
-    }
-    else
-    {
-        //_sniff = false;
-        //_delay_time_us = 8000;
-        printf("UnSniff: \n");
-    }
-    _ns_reset_report_spacer();
-}
-
-
-
-/* HCI mode defenitions */
-#define HCI_MODE_ACTIVE                 0x00
-#define HCI_MODE_HOLD                   0x01
-#define HCI_MODE_SNIFF                  0x02
-#define HCI_MODE_PARK                   0x03
 
 // SWITCH BTC GAP Event Callback
 void switch_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
@@ -384,7 +381,6 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
             {
                 ESP_LOGI(TAG, "START OK");
                 led_set_state(LED_PAIRING);  // 🟠 Amber while advertising/reconnecting
-
                 if (_switch_paired) {
 					// Adaptive reconnect timing
 					int64_t uptime_ms = esp_timer_get_time() / 1000;
@@ -405,9 +401,6 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
 					ESP_LOGI(TAG, "No paired host found — entering discoverable mode.");
 					esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
 				}
-
-
-
             }
             else
             {
@@ -447,7 +440,6 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
             if (param->disconnect.status == ESP_OK)
             {
                 ESP_LOGI(TAG, "DISCONNECT OK");
-
                 // Return to advertising mode for pairing
                 led_set_state(LED_PAIRING);   // 🟠 Amber while re-advertising
                 esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
@@ -510,40 +502,11 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
     }
 }
 
-
-
-// Switch HID report maps
-esp_hid_raw_report_map_t switch_report_maps[1] = {
-    {
-        .data = procon_hid_descriptor,
-        .len = (uint16_t)PROCON_HID_REPORT_MAP_LEN,
-    }};
-
-// Bluetooth App setup data
-util_bt_app_params_s switch_app_params = {
-    .hidd_cb = switch_bt_hidd_cb,
-    .gap_cb = switch_bt_gap_cb,
-    .bt_mode = ESP_BT_MODE_CLASSIC_BT,
-    .appearance = ESP_HID_APPEARANCE_GAMEPAD,
-};
-
-esp_hid_device_config_t switch_hidd_config = {
-    .vendor_id = HID_VEND_NSPRO,
-    .product_id = HID_PROD_NSPRO,
-    .version = 0x0100,
-    .device_name = "Pro Controller",
-    .manufacturer_name = "Nintendo",
-    .serial_number = "000000",
-    .report_maps = switch_report_maps,
-    .report_maps_len = 1,
-};
-
 // Attempt start of Nintendo Switch controller core
 int core_bt_switch_start(void)
 {
     const char *TAG = "core_bt_switch_start";
-    esp_err_t ret;
-    int err;
+    int err=1;
 
     // Convert calibration data
     switch_analog_calibration_init();
@@ -594,7 +557,7 @@ int core_bt_switch_start(void)
     // --------------------------------------------------
     err = util_bluetooth_register_app(&switch_app_params, &switch_hidd_config);
 
-    return 1;
+    return err;
 }
 
 
@@ -606,49 +569,6 @@ void core_bt_switch_stop(void)
     //const char *TAG = "core_ns_stop";
     util_bluetooth_deinit();
 }
-
-/* void _switch_bt_task_standard(void *parameters)
-{
-    ESP_LOGI("_switch_bt_task_standard", "Starting input loop task...");
-
-    static ns_report_mode_t _report_mode = NS_REPORT_MODE_FULL;
-
-    //_report_mode = NS_REPORT_MODE_BLANK;
-    _hid_connected = false;
-    app_set_report_timer(DEFAULT_US_DELAY); 
-
-    for (;;)
-    {
-        static uint8_t _full_buffer[64] = {0};
-        uint8_t tmp[64] = {0x00, 0x00};
-
-        if(_hid_connected)
-        {
-            if(_ns_send_check_nonblocking())
-            {
-                if((_report_mode == NS_REPORT_MODE_FULL))
-                {
-                    ns_report_clear(_full_buffer, 64);
-                    ns_report_setinputreport_full(_full_buffer);
-                    ns_report_settimer(_full_buffer);
-                    ns_report_setbattconn(_full_buffer);
-                    if(_hid_connected){
-                        esp_bt_hid_device_send_report(ESP_HIDD_REPORT_TYPE_INTRDATA, 0x30, SWITCH_BT_REPORT_SIZE, _full_buffer);
-					}
-                }
-                else
-                {
-                    esp_bt_hid_device_send_report(ESP_HIDD_REPORT_TYPE_INTRDATA, 0x00, 1, tmp);
-                }
-            }
-        }
-        else
-        {
-            vTaskDelay(16/portTICK_PERIOD_MS);
-        }
-    }
-} */
-
 
 void _switch_bt_task_standard(void *parameters)
 {
@@ -668,7 +588,6 @@ void _switch_bt_task_standard(void *parameters)
 		}
 
 		static uint8_t _full_buffer[64] = {0};
-
         uint8_t tmp[64] = {0x00, 0x00};
 
         // Only send when connected
@@ -722,7 +641,9 @@ void _switch_bt_task_standard(void *parameters)
 
 void switch_bt_sendinput(i2cinput_input_s *input)
 {
-    _switch_input_data.ls_x = input->lx;
+    if (input == NULL) return;
+	
+	_switch_input_data.ls_x = input->lx;
     _switch_input_data.ls_y = input->ly;
 
     _switch_input_data.rs_x = input->rx;

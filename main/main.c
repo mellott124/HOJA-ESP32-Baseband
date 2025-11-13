@@ -64,7 +64,7 @@ uint8_t _i2c_buffer_in[32];
 // --------------------------------------------------------------------------
 // MODE MANAGEMENT
 // --------------------------------------------------------------------------
-static input_mode_t current_mode = INPUT_MODE_XINPUT;
+static input_mode_t current_mode = INPUT_MODE_N64;
 input_mode_t get_current_mode(void) { return current_mode; }
 
 // --------------------------------------------------------------------------
@@ -169,23 +169,6 @@ void app_settings_load(void)
         memset(&global_loaded_settings, 0, sizeof(global_loaded_settings));
         global_loaded_settings.magic = HOJA_MAGIC_NUM;
         app_settings_save();
-    }
-}
-
-
-// --------------------------------------------------------------------------
-// ENSURE VALID BLUETOOTH MAC ADDRESS
-// --------------------------------------------------------------------------
-static void sanitize_mac(uint8_t *mac)
-{
-    mac[0] &= 0xFC;
-    bool allzero = true;
-    for (int i = 0; i < 6; i++) {
-        if (mac[i] != 0x00) { allzero = false; break; }
-    }
-    if (allzero) {
-        ESP_LOGW(TAG, "MAC all zeros — using hardware MAC instead");
-        esp_read_mac(mac, ESP_MAC_BT);
     }
 }
 
@@ -553,7 +536,6 @@ void app_main(void)
          global_loaded_settings.paired_host_switch_mac[4],
          global_loaded_settings.paired_host_switch_mac[5]);
 
-    ESP_LOGI(TAG, "Switch BT Mode Init...");
 
 	// Log which Switch controller identity is being emulated
 	ESP_LOGI(TAG, "Emulating as: %s",
