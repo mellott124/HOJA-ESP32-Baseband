@@ -509,7 +509,7 @@ void app_main(void)
     led_set_state(LED_IDLE);
 
     // 🌈 Select mode before BT start
-    //select_boot_mode_from_right_dpad();
+    select_boot_mode_from_right_dpad();
 
     // Optional LED feedback per mode
 	switch (get_current_mode()) {
