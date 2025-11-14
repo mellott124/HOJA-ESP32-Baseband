@@ -98,7 +98,7 @@ typedef struct
     uint8_t device_mac_switch[6];
     uint8_t device_mac_depreciated[6];
     uint8_t device_mac_sinput[6];
-    uint8_t device_mac_xinput[6]; // ✅ Restored for XInput
+    uint8_t device_mac_dinput[6]; // ✅ Restored for DInput
 
     // Switch pairing info
     uint8_t paired_host_switch_mac[6];
@@ -108,9 +108,9 @@ typedef struct
     uint8_t paired_host_sinput_mac[6];
     bool has_paired_sinput;
 
-    // XInput pairing info
-    uint8_t paired_host_xinput_mac[6];
-    bool has_paired_xinput;
+    // DInput pairing info
+    uint8_t paired_host_dinput_mac[6];
+    bool has_paired_dinput;
 
 } hoja_settings_s;
 

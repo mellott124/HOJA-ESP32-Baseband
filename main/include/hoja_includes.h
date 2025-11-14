@@ -53,7 +53,7 @@ typedef enum
 {
     INPUT_MODE_LOAD     = -1,
     INPUT_MODE_SWPRO    = 0,
-    INPUT_MODE_XINPUT   = 1,
+    INPUT_MODE_DINPUT   = 1,
     INPUT_MODE_GCUSB    = 2,
     INPUT_MODE_GAMECUBE = 3,
     INPUT_MODE_N64      = 4,

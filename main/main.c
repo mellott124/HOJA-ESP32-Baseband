@@ -16,7 +16,7 @@
 #include "esp_bt_main.h"
 #include "hoja.h"
 #include "core_bt_switch.h"
-#include "core_bt_xinput.h"
+#include "core_bt_dinput.h"
 #include "esp_gap_bt_api.h"
 #include "hoja_includes.h"
 #include "hoja_types.h"
@@ -64,7 +64,7 @@ uint8_t _i2c_buffer_in[32];
 // --------------------------------------------------------------------------
 // MODE MANAGEMENT
 // --------------------------------------------------------------------------
-static input_mode_t current_mode = INPUT_MODE_N64;
+static input_mode_t current_mode = INPUT_MODE_DINPUT;
 input_mode_t get_current_mode(void) { return current_mode; }
 
 // --------------------------------------------------------------------------
@@ -84,7 +84,7 @@ static void select_boot_mode_from_right_dpad(void)
     } else if (c_right_pressed) {
         current_mode = INPUT_MODE_NES;     // NES Controller
     } else if (c_down_pressed) {
-        current_mode = INPUT_MODE_XINPUT;  // XInput Controller
+        current_mode = INPUT_MODE_DINPUT;  // DInput Controller
     } else {
         current_mode = INPUT_MODE_N64;     // default
     }
@@ -94,7 +94,7 @@ static void select_boot_mode_from_right_dpad(void)
         current_mode == INPUT_MODE_SNES  ? "SNES Controller" :
         current_mode == INPUT_MODE_NES   ? "NES Controller" :
         current_mode == INPUT_MODE_N64   ? "N64 Controller" :
-		current_mode == INPUT_MODE_XINPUT   ? "XInput Controller" :
+		current_mode == INPUT_MODE_DINPUT   ? "DInput Controller" :
         "Unknown");
 
     // Optional: visual LED feedback (e.g. blink pattern per mode)
@@ -145,19 +145,19 @@ void app_settings_load(void)
         memcmp(global_loaded_settings.paired_host_switch_mac, "\0\0\0\0\0\0", 6) != 0) {
         global_loaded_settings.has_paired_switch = true;
     }
-    if (!global_loaded_settings.has_paired_xinput &&
-        memcmp(global_loaded_settings.paired_host_xinput_mac, "\0\0\0\0\0\0", 6) != 0) {
-        global_loaded_settings.has_paired_xinput = true;
+    if (!global_loaded_settings.has_paired_dinput &&
+        memcmp(global_loaded_settings.paired_host_dinput_mac, "\0\0\0\0\0\0", 6) != 0) {
+        global_loaded_settings.has_paired_dinput = true;
     }
 
     // ---------------------------------------------------------------------
-    // 🧱 Initialize the new XInput device MAC if missing
+    // 🧱 Initialize the new DInput device MAC if missing
     // ---------------------------------------------------------------------
-    if (memcmp(global_loaded_settings.device_mac_xinput, "\0\0\0\0\0\0", 6) == 0) {
-        ESP_LOGI(TAG, "Generating independent XInput MAC from Switch MAC...");
-        memcpy(global_loaded_settings.device_mac_xinput,
+    if (memcmp(global_loaded_settings.device_mac_dinput, "\0\0\0\0\0\0", 6) == 0) {
+        ESP_LOGI(TAG, "Generating independent DInput MAC from Switch MAC...");
+        memcpy(global_loaded_settings.device_mac_dinput,
                global_loaded_settings.device_mac_switch, 6);
-        global_loaded_settings.device_mac_xinput[5] += 3;  // offset ensures unique identity
+        global_loaded_settings.device_mac_dinput[5] += 3;  // offset ensures unique identity
         app_settings_save();
     }
 
@@ -324,7 +324,7 @@ static void controller_task(void* arg)
                 input.rx = 0x7FFF; input.ry = 0x7FFF;
                 break;
 			
-			case INPUT_MODE_XINPUT:
+			case INPUT_MODE_DINPUT:
 				input.button_east  = !gpio_get_level(GPIO_BTN_A);     // A
 				input.button_south = !gpio_get_level(GPIO_BTN_B);     // B
 				input.button_west  = !gpio_get_level(GPIO_BTN_C_L);   // X
@@ -397,8 +397,8 @@ static void controller_task(void* arg)
         // =====================================================
 		// SEND FINAL INPUT REPORT
 		// =====================================================
-		if (get_current_mode() == INPUT_MODE_XINPUT)
-			xinput_bt_sendinput(&input);
+		if (get_current_mode() == INPUT_MODE_DINPUT)
+			dinput_bt_sendinput(&input);
 		else
 			switch_bt_sendinput(&input);
 
@@ -439,13 +439,13 @@ void app_save_host_mac(input_mode_t m, uint8_t *a)
 
     switch (m)
     {
-        case INPUT_MODE_XINPUT:
-            if (memcmp(global_loaded_settings.paired_host_xinput_mac, a, 6) != 0)
+        case INPUT_MODE_DINPUT:
+            if (memcmp(global_loaded_settings.paired_host_dinput_mac, a, 6) != 0)
             {
-                memcpy(global_loaded_settings.paired_host_xinput_mac, a, 6);
-                global_loaded_settings.has_paired_xinput = true;
+                memcpy(global_loaded_settings.paired_host_dinput_mac, a, 6);
+                global_loaded_settings.has_paired_dinput = true;
                 changed = true;
-                ESP_LOGI("MAIN", "Updated paired XInput host MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                ESP_LOGI("MAIN", "Updated paired DInput host MAC: %02X:%02X:%02X:%02X:%02X:%02X",
                          a[0], a[1], a[2], a[3], a[4], a[5]);
             }
             break;
@@ -509,14 +509,14 @@ void app_main(void)
     led_set_state(LED_IDLE);
 
     // 🌈 Select mode before BT start
-    select_boot_mode_from_right_dpad();
+    //select_boot_mode_from_right_dpad();
 
     // Optional LED feedback per mode
 	switch (get_current_mode()) {
 		case INPUT_MODE_SWPRO: led_set_state(LED_PAIRING); break;   // Amber
 		case INPUT_MODE_SNES:  led_set_state(LED_CONNECTED); break; // Green
 		case INPUT_MODE_NES:   led_set_state(LED_CONNECTED); break; // Green (same as SNES)
-		case INPUT_MODE_XINPUT: led_set_state(LED_XINPUT); break;   // Purple
+		case INPUT_MODE_DINPUT: led_set_state(LED_DINPUT); break;   // Purple
 		case INPUT_MODE_N64:
 		default:               led_set_state(LED_IDLE); break;      // Blue
 	}
@@ -546,9 +546,9 @@ void app_main(void)
 
     int bt_status = 0;
 	switch (get_current_mode()) {
-		case INPUT_MODE_XINPUT:
-			ESP_LOGI(TAG, "Starting XInput mode...");
-			bt_status = core_bt_xinput_start();
+		case INPUT_MODE_DINPUT:
+			ESP_LOGI(TAG, "Starting DInput mode...");
+			bt_status = core_bt_dinput_start();
 			break;
 
 		case INPUT_MODE_SWPRO:

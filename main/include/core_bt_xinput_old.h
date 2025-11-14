@@ -1,60 +1,40 @@
 #ifndef CORE_BT_XINPUT_H
 #define CORE_BT_XINPUT_H
 
+// Include any necessary includes from HOJA backend
 #include "hoja_includes.h"
+#include "hoja.h"
 
-// ============================================================
-// DEFINES
-// ============================================================
+typedef struct {
+    uint8_t dpad_up;
+    uint8_t dpad_down;
+    uint8_t dpad_left;
+    uint8_t dpad_right;
 
-// ============================================================
-// STRUCTURES
-// ============================================================
+    uint8_t btn_a;     // VB A
+    uint8_t btn_b;     // VB B
+    uint8_t btn_select;
+    uint8_t btn_start;
+    uint8_t btn_l;     // VB L
+    uint8_t btn_r;     // VB R
 
-// Basic XInput-style input report format (used for HID packet building)
-typedef struct
-{
-    uint16_t stick_left_x;
-    uint16_t stick_left_y;
-    uint16_t stick_right_x;
-    uint16_t stick_right_y;
-    uint8_t  lt;
-    uint8_t  rt;
-    uint8_t  dpad_up;
-    uint8_t  dpad_down;
-    uint8_t  dpad_left;
-    uint8_t  dpad_right;
-    uint8_t  button_a;
-    uint8_t  button_b;
-    uint8_t  button_x;
-    uint8_t  button_y;
-} __attribute__((packed)) xi_input_s;
+    // Always centered for VB
+    uint8_t lx;
+    uint8_t ly;
+    uint8_t rx;
+    uint8_t ry;
 
-// ============================================================
-// EXTERNAL DECLARATIONS
-// ============================================================
+} xinput_input_s;
 
-// From core_bt_xinput.c
-extern util_bt_app_params_s xinput_app_params;
-extern esp_hid_device_config_t xinput_hidd_config;
 
-// ============================================================
-// FUNCTION PROTOTYPES
-// ============================================================
-
-// Core Bluetooth lifecycle
-esp_err_t core_bt_xinput_start(void);
-void      core_bt_xinput_stop(void);
-
-// Send input (called from controller_task in main.c)
-void      xinput_bt_sendinput(i2cinput_input_s *input);
-static void _xinput_bt_task_standard(void *parameters);
-
-// BLE callbacks
-void      xinput_ble_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, void *event_data);
-void      xinput_ble_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
-
-// Optional status query
-bool      xinput_is_connected(void);
+int core_bt_xinput_start(void);
+void core_bt_xinput_stop(void);
+void xinput_bt_sendinput(const i2cinput_input_s *input);;
+void xinput_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param);
+void xinput_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, void *event_data);
+void switch_bt_end_task(void);
+void _xinput_bt_task_standard(void *parameters);
+void xinput_build_report_8b(const xinput_input_s *in, uint8_t out[8]);
+void log_i2cinput_state(const i2cinput_input_s *in);
 
 #endif // CORE_BT_XINPUT_H

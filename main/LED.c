@@ -165,7 +165,7 @@ void led_task(void *arg)
 			}
 			break;
 
-			case LED_XINPUT: // solid purple (red + blue)
+			case LED_DINPUT: // solid purple (red + blue)
 				led_set_rgb(LED_MAX_DUTY, 0, LED_MAX_DUTY);
 				vTaskDelay(pdMS_TO_TICKS(500));
 				break;

@@ -9,7 +9,7 @@ idf_component_register(
         "mitch_i2c.c"
         "core_bt_switch.c"
         "core_bt_sinput.c"
-        "core_bt_xinput.c"
+        "core_bt_dinput.c"
         "esp_hid_gap.c"
         "util_bt_hid.c"
         "switch_analog.c"
