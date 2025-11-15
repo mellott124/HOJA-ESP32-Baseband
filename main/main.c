@@ -86,7 +86,7 @@ static void select_boot_mode_from_right_dpad(void)
     } else if (c_down_pressed) {
         current_mode = INPUT_MODE_DINPUT;  // DInput Controller
     } else {
-        current_mode = INPUT_MODE_N64;     // default
+        //current_mode = current_mode;     // default.  Use the global above.
     }
 
     ESP_LOGI(TAG, "Selected mode: %s",
@@ -509,7 +509,7 @@ void app_main(void)
     led_set_state(LED_IDLE);
 
     // 🌈 Select mode before BT start
-    //select_boot_mode_from_right_dpad();
+    select_boot_mode_from_right_dpad();
 
     // Optional LED feedback per mode
 	switch (get_current_mode()) {

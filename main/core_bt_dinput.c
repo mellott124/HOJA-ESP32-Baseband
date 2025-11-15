@@ -219,7 +219,7 @@ void dinput_bt_hidd_cb(void *handler_args,
             if (param->connect.status == ESP_OK) {
                 _hid_connected = true;
                 ESP_LOGI(TAG, "CONNECT OK");
-                led_set_state(LED_CONNECTED);
+                led_set_player_number(1); //Blinking Green Connected State to mimic Switch
             } else {
                 ESP_LOGE(TAG, "connect failed");
                 led_set_state(LED_ERROR);
@@ -403,27 +403,81 @@ void _dinput_bt_task(void *parameters)
     }
 }
 
-// -------------------------------
-// Input Mapping
-// -------------------------------
-// -------------------------------
-// Input Mapping
-// -------------------------------
+// ============================================================================
+// IMPORTANT: HOJA INPUT FIELD INTERPRETATION
+// ============================================================================
+//
+// HOJA input fields (button_north, button_west, rx, ry, ax, ay, etc.) DO NOT
+// have semantic meaning. They DO NOT represent Up/Down/Left/Right or X/Y/Z.
+//
+// They are simply BIT LANES coming out of the HOJA input multiplexer.
+// The meaning of each bit depends entirely on the controller mode:
+//   • Virtual Boy mode
+//   • N64 mode
+//   • Switch Pro mode
+//   • SNES mode
+//   • Others...
+//
+// For example:
+//   - In VB mode, right-dpad UP appears on input->button_north
+//   - In another mode, input->button_north might be "X button"
+//   - In another, it might represent "face button west"
+//   - rx/ry fields are ALWAYS populated (analog reads) and must not be used
+//     as boolean truth tests.
+//
+// Because of this, we must *never* rely on HOJA field NAMES to infer direction
+// or meaning. They are simply signals.
+//
+// Instead, we derive meaning only from:
+//   1. Real debug logs that show which HOJA bit fires for each VB button
+//   2. Explicit comparisons (e.g., input->rx == 65535) instead of boolean tests
+//
+// This prevents:
+//   - Wrong direction detection
+//   - Axes stuck at max
+//   - Inputs firing continuously
+//   - Drift between modes
+//
+// Summary:
+//   Treat HOJA fields as raw wires, not meaningful names.
+//   Only map based on your validated debug table.
+//
+// ============================================================================
+// +-----------------------+----------------------+---------------------------+
+// | VB PHYSICAL BUTTON    | HOJA FIELD FIRED     | DINPUT OUTPUT             |
+// +-----------------------+----------------------+---------------------------+
+// | A                     | button_south         | Button 1                  |
+// | B                     | button_east          | Button 2                  |
+// | Select                | button_minus         | Button 15                 |
+// | Start                 | button_plus          | Button 16                 |
+// | L                     | trigger_l            | Button 9                  |
+// | R                     | trigger_r            | Button 10                 |
+// +-----------------------+----------------------+---------------------------+
+// | LEFT DPAD UP          | dpad_up              | Button 5                  |
+// | LEFT DPAD DOWN        | dpad_down            | Button 6                  |
+// | LEFT DPAD LEFT        | dpad_left            | Button 7                  |
+// | LEFT DPAD RIGHT       | dpad_right           | Button 8                  |
+// +-----------------------+----------------------+---------------------------+
+// | RIGHT DPAD UP         | button_north         | Z Rotation = 0            |
+// | RIGHT DPAD DOWN       | ry == 0              | Z Rotation = 255          |
+// | RIGHT DPAD LEFT       | button_west          | Z = 0                     |
+// | RIGHT DPAD RIGHT      | rx == 65535          | Z = 255                   |
+// +-----------------------+----------------------+---------------------------+
+// | NO RIGHT DPAD PRESS   | rx≈32767 ry≈32767    | Z = 128, ZRot = 128       |
+// +-----------------------+----------------------+---------------------------+
 void dinput_bt_sendinput(i2cinput_input_s *input)
 {
     if (!input) return;
 
     debug_print_input_changes(input);
 
-    //
     // -------- LEFT DPAD → BUTTONS ONLY --------
-    //
     uint16_t b = 0;
 
     b |= (input->button_south) << 0;    // A
     b |= (input->button_east)  << 1;    // B
-    b |= (input->button_west)  << 2;    // Y
-    b |= (input->button_north) << 3;    // X
+    //b |= (input->button_west)  << 2;    // Y
+    //b |= (input->button_north) << 3;    // X
 
     b |= (input->dpad_up)      << 4;
     b |= (input->dpad_down)    << 5;
@@ -443,34 +497,31 @@ void dinput_bt_sendinput(i2cinput_input_s *input)
 
     _dinput_report.buttons = b;
 
-    //
-    // -------- RIGHT DPAD → DINPUT AXES (Z + ZROT) --------
-    //
-    uint8_t z  = 128;   // Z axis (left/right)      → left/right on VB right dpad
-    uint8_t rz = 128;   // Z rotation (up/down)     → up/down on VB right dpad
+	// -------- RIGHT DPAD → DINPUT AXES (Z + ZROT) --------
+	uint8_t z  = 128;   // X-axis of right stick (left/right)
+	uint8_t rz = 128;   // Y-axis of right stick (up/down)
 
-    // Right D-pad Up
-    if (input->ax) {        // HOJA debug shows “x”
-        rz = 0;             // Zrot MIN
-    }
+	// --- RIGHT DPAD UP ---
+	if (input->button_north) {        
+		rz = 0;          // Zrot MIN
+	}
+	// --- RIGHT DPAD DOWN ---
+	else if (input->ry == 0) { 
+		rz = 255;        // Zrot MAX
+	}
 
-    // Right D-pad Down
-    if (input->ry) {        // HOJA debug shows “Ry”
-        rz = 255;           // Zrot MAX
-    }
+	// --- RIGHT DPAD LEFT ---
+	if (input->button_west) {    
+		z = 0;           // Z MIN
+	}
+	// --- RIGHT DPAD RIGHT ---
+	else if (input->rx == 65535) { 
+		z = 255;         // Z MAX
+	}
 
-    // Right D-pad Left
-    if (input->ay) {        // HOJA debug shows “Y”
-        z = 0;              // Z MIN
-    }
+	_dinput_report.z  = z;
+	_dinput_report.rz = rz;
 
-    // Right D-pad Right
-    if (input->rx) {        // HOJA debug shows “Rx”
-        z = 255;            // Z MAX
-    }
-
-    _dinput_report.z  = z;
-    _dinput_report.rz = rz;
 }
 
 
