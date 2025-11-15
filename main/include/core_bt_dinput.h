@@ -33,5 +33,7 @@ void dinput_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
 
 void dinput_bt_end_task();
 void _dinput_bt_task(void *parameters);
+uint8_t normalize_axis(uint16_t v);
+void debug_print_input_changes(const i2cinput_input_s *in);
 
 #endif

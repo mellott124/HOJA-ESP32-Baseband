@@ -523,7 +523,7 @@ int core_bt_switch_start(void)
     tmpmac[5] -= 2;
 
     // --------------------------------------------------
-    // 🧩 Force paired flag if a stored host MAC exists
+    // Force paired flag if a stored host MAC exists
     // --------------------------------------------------
     const uint8_t zero_mac[6] = {0};
     if (memcmp(global_loaded_settings.paired_host_switch_mac, zero_mac, 6) != 0) {
@@ -559,9 +559,6 @@ int core_bt_switch_start(void)
 
     return err;
 }
-
-
-
 
 // Stop Nintendo Switch controller core
 void core_bt_switch_stop(void)
@@ -672,3 +669,4 @@ void switch_bt_sendinput(i2cinput_input_s *input)
     _switch_input_data.sb_left  = input->button_stick_left;
     _switch_input_data.sb_right = input->button_stick_right;
 }
+

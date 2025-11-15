@@ -4,6 +4,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "LED.h"
+#include "drv2605_esp.h"
+
+extern void app_settings_save(void);
+static i2cinput_input_s _last_input = {0};
 
 // -------------------------------
 // Globals
@@ -70,7 +74,16 @@ static const uint8_t dinput_hid_descriptor[] = {
         0x95, 0x10,    // Report Count = 16 buttons
 
         0x81, 0x02,    // Input (Data,Var,Abs)
-
+		
+    // ------ NEW HAPTIC OUTPUT REPORT ------
+        0x85, 0x02,     // Report ID 2
+        0x09, 0x20,     // Usage (FF Placeholder)
+        0x15, 0x00,
+        0x26, 0xFF, 0x00,
+        0x75, 0x08,
+        0x95, 0x02,     // strong + weak rumble
+        0x91, 0x02,     // Output (Data,Var,Abs)
+    // ---------------------------------------
     0xC0              // End Collection
 };
 
@@ -95,11 +108,11 @@ esp_hid_device_config_t dinput_hidd_config = {
     .vendor_id = 0x1209,
     .product_id = 0x0001,
     .version = 0x0001,
-    .device_name = "RetroOnyx DInput",
+    .device_name = "RetroOnyx Controller",
     .manufacturer_name = "RetroOnyx",
     .serial_number = "000001",
     .report_maps = dinput_report_maps,
-    .report_maps_len = 1
+    .report_maps_len = 1,
 };
 
 // -------------------------------
@@ -179,12 +192,18 @@ void dinput_bt_hidd_cb(void *handler_args,
                 led_set_state(LED_PAIRING);
 
                 if (_dinput_paired) {
+                    // --- Autoconnect to last paired Windows host ---
+                    ESP_LOGI(TAG, "Autoconnect: trying stored host...");
                     int64_t uptime = esp_timer_get_time() / 1000;
                     int delay = (uptime < 3000) ? 700 : 200;
                     vTaskDelay(pdMS_TO_TICKS(delay));
+
                     util_bluetooth_connect(
                         global_loaded_settings.paired_host_dinput_mac);
+
                 } else {
+                    // --- First-time pairing mode ---
+                    ESP_LOGI(TAG, "No pair record — entering discoverable mode");
                     esp_bt_gap_set_scan_mode(
                         ESP_BT_CONNECTABLE,
                         ESP_BT_GENERAL_DISCOVERABLE
@@ -210,10 +229,12 @@ void dinput_bt_hidd_cb(void *handler_args,
         case ESP_HIDD_DISCONNECT_EVENT:
             _hid_connected = false;
             ESP_LOGI(TAG, "DISCONNECT");
+
             led_set_state(LED_PAIRING);
             esp_bt_gap_set_scan_mode(
                 ESP_BT_CONNECTABLE,
-                ESP_BT_GENERAL_DISCOVERABLE);
+                ESP_BT_GENERAL_DISCOVERABLE
+            );
             break;
 
         case ESP_HIDD_STOP_EVENT:
@@ -221,6 +242,29 @@ void dinput_bt_hidd_cb(void *handler_args,
             _hid_connected = false;
             led_set_state(LED_IDLE);
             break;
+			
+		case ESP_HIDD_OUTPUT_EVENT: {
+			const uint8_t *data = param->output.data;
+			int len = param->output.length;
+
+			ESP_LOGI(TAG, "HID OUT (ReportID=%d, len=%d)", data[0], len);
+
+			// Report ID must be 2 for rumble
+			if (len >= 3 && data[0] == 0x02) {
+				uint8_t strong = data[1];
+				uint8_t weak   = data[2];
+
+				// Pick max for single-motor DRV2605
+				uint8_t level = strong > weak ? strong : weak;
+
+				ESP_LOGI(TAG, "Rumble strong=%u weak=%u final=%u",
+						 strong, weak, level);
+
+				drv2605_set_rtp(level);
+			}
+
+				break;
+		}
 
         default:
             break;
@@ -233,40 +277,77 @@ void dinput_bt_hidd_cb(void *handler_args,
 int core_bt_dinput_start(void)
 {
     const char *TAG = "core_bt_dinput_start";
+    ESP_LOGI(TAG, "Starting DInput Bluetooth stack...");
+
     int err = 1;
 
-    uint8_t tmpmac[6];
-    uint8_t *mac = global_live_data.current_mac;
+    uint8_t tmpmac[6] = {0};
 
-    if ((mac[0] == 0) && (mac[1] == 0)) {
-        mac = global_loaded_settings.device_mac_dinput;
+    // ------------------------------------------------------
+    // Correct MAC handling: EFUSE fallback + save
+    // ------------------------------------------------------
+    uint8_t base_mac[6];
+    esp_efuse_mac_get_default(base_mac);
+
+    ESP_LOGI(TAG,
+        "EFUSE base MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+        base_mac[0], base_mac[1], base_mac[2],
+        base_mac[3], base_mac[4], base_mac[5]);
+
+    const uint8_t zero[6] = {0};
+
+    // Case 1: stored MAC is valid
+    if (memcmp(global_loaded_settings.device_mac_dinput, zero, 6) != 0) {
+        ESP_LOGI(TAG, "Using stored DInput MAC.");
+        memcpy(tmpmac, global_loaded_settings.device_mac_dinput, 6);
+    }
+    // Case 2: stored MAC is zero → regenerate from EFUSE
+    else {
+        ESP_LOGI(TAG, "Generating new DInput MAC from efuse base.");
+        memcpy(tmpmac, base_mac, 6);
+        tmpmac[5] -= 2;      // Espressif rule for BT Classic
+
+        // Save the new MAC
+        memcpy(global_loaded_settings.device_mac_dinput, tmpmac, 6);
+        app_settings_save();
+        ESP_LOGI(TAG, "Saved new DInput MAC.");
     }
 
-    memcpy(tmpmac, mac, 6);
-    tmpmac[5] -= 2;
+    ESP_LOGI(TAG,
+        "Final DInput BT MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+        tmpmac[0], tmpmac[1], tmpmac[2],
+        tmpmac[3], tmpmac[4], tmpmac[5]);
 
-    // ---------------------------------------------------------
-    // DINPUT MUST ALWAYS START FRESH FOR WINDOWS
-    // Disable reconnect logic. Ignore stored MAC.
-    // ---------------------------------------------------------
-    _dinput_paired = false;
+    // ------------------------------------------------------
+    // Pairing status
+    // ------------------------------------------------------
+    if (memcmp(global_loaded_settings.paired_host_dinput_mac, zero, 6) != 0) {
+        _dinput_paired = true;
+        ESP_LOGI(TAG,
+            "Stored DInput paired host found — enabling autoconnect");
+    } else {
+        _dinput_paired = false;
+        ESP_LOGI(TAG, "No paired host — entering discoverable mode");
+        esp_bt_gap_set_scan_mode(
+            ESP_BT_CONNECTABLE,
+            ESP_BT_GENERAL_DISCOVERABLE
+        );
+    }
 
-    // Always enter discoverable/connectable mode immediately
-    esp_bt_gap_set_scan_mode(
-        ESP_BT_CONNECTABLE,
-        ESP_BT_GENERAL_DISCOVERABLE
-    );
-
-    // ---------------------------------------------------------
-    // Initialize BT controller + stack
-    // (Classic HID security is handled automatically in IDF 5.x)
-    // ---------------------------------------------------------
+    // ------------------------------------------------------
+    // Initialize Bluetooth
+    // ------------------------------------------------------
     err = util_bluetooth_init(tmpmac);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "util_bluetooth_init FAILED: %d", err);
+        return err;
+    }
 
-    // ---------------------------------------------------------
-    // REGISTER HID DEVICE
-    // ---------------------------------------------------------
+    // ------------------------------------------------------
+    // Register HID app
+    // ------------------------------------------------------
     err = util_bluetooth_register_app(&dinput_app_params, &dinput_hidd_config);
+    ESP_LOGI(TAG, "HID App registration returned: %d", err);
 
     return err;
 }
@@ -325,24 +406,24 @@ void _dinput_bt_task(void *parameters)
 // -------------------------------
 // Input Mapping
 // -------------------------------
+// -------------------------------
+// Input Mapping
+// -------------------------------
 void dinput_bt_sendinput(i2cinput_input_s *input)
 {
     if (!input) return;
 
-    // Normalize 0–4095 into 0–255
-    _dinput_report.x  = (input->lx >> 4);
-    _dinput_report.y  = (input->ly >> 4);
-    _dinput_report.z  = (input->rx >> 4);
-    _dinput_report.rz = (input->ry >> 4);
+    debug_print_input_changes(input);
 
+    //
+    // -------- LEFT DPAD → BUTTONS ONLY --------
+    //
     uint16_t b = 0;
 
-    // Basic 16-button map
-    // You can customize easily
-    b |= (input->button_south) << 0;
-    b |= (input->button_east)  << 1;
-    b |= (input->button_west)  << 2;
-    b |= (input->button_north) << 3;
+    b |= (input->button_south) << 0;    // A
+    b |= (input->button_east)  << 1;    // B
+    b |= (input->button_west)  << 2;    // Y
+    b |= (input->button_north) << 3;    // X
 
     b |= (input->dpad_up)      << 4;
     b |= (input->dpad_down)    << 5;
@@ -357,11 +438,41 @@ void dinput_bt_sendinput(i2cinput_input_s *input)
     b |= (input->button_stick_left)  << 12;
     b |= (input->button_stick_right) << 13;
 
-    b |= (input->button_minus) << 14;
-    b |= (input->button_plus)  << 15;
+    b |= (input->button_minus) << 14;  // SELECT
+    b |= (input->button_plus)  << 15;  // START
 
     _dinput_report.buttons = b;
+
+    //
+    // -------- RIGHT DPAD → DINPUT AXES (Z + ZROT) --------
+    //
+    uint8_t z  = 128;   // Z axis (left/right)      → left/right on VB right dpad
+    uint8_t rz = 128;   // Z rotation (up/down)     → up/down on VB right dpad
+
+    // Right D-pad Up
+    if (input->ax) {        // HOJA debug shows “x”
+        rz = 0;             // Zrot MIN
+    }
+
+    // Right D-pad Down
+    if (input->ry) {        // HOJA debug shows “Ry”
+        rz = 255;           // Zrot MAX
+    }
+
+    // Right D-pad Left
+    if (input->ay) {        // HOJA debug shows “Y”
+        z = 0;              // Z MIN
+    }
+
+    // Right D-pad Right
+    if (input->rx) {        // HOJA debug shows “Rx”
+        z = 255;            // Z MAX
+    }
+
+    _dinput_report.z  = z;
+    _dinput_report.rz = rz;
 }
+
 
 void dinput_bt_end_task()
 {
@@ -370,3 +481,35 @@ void dinput_bt_end_task()
         _dinput_bt_task_handle = NULL;
     }
 }
+
+uint8_t normalize_axis(uint16_t v)
+{
+    // v is 0–4095. Convert to signed (-2048..+2047),
+    // then shift to 0–255 with center = 128.
+    int16_t centered = (int16_t)v - 2048;      // now -2048..+2047
+    centered >>= 3;                            // now approx -256..+255
+    return (uint8_t)(centered + 128);          // center becomes 128
+}
+
+void debug_print_input_changes(const i2cinput_input_s *in)
+{
+    static const char *TAG = "INPUTDBG";
+
+    if (memcmp(&_last_input, in, sizeof(i2cinput_input_s)) != 0)
+    {
+        ESP_LOGI(TAG,
+            "UDLR=%d%d%d%d  A=%d B=%d X=%d Y=%d "
+            "L=%d ZL=%d R=%d ZR=%d  +/−=%d%d  L3=%d R3=%d | "
+            "RX=%u RY=%u LX=%u LY=%u",
+            in->dpad_up, in->dpad_down, in->dpad_left, in->dpad_right,
+            in->button_south, in->button_east, in->button_north, in->button_west,
+            in->trigger_l, in->trigger_zl, in->trigger_r, in->trigger_zr,
+            in->button_plus, in->button_minus,
+            in->button_stick_left, in->button_stick_right,
+            in->rx, in->ry, in->lx, in->ly
+        );
+
+        _last_input = *in;
+    }
+}
+

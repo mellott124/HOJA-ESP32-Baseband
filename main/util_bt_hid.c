@@ -294,7 +294,7 @@ int util_bluetooth_init(uint8_t *mac_address)
     }
 
     util_bt_hid_status = UTIL_BT_HID_STATUS_INITIALIZED;
-    return 1;
+    return ESP_OK;
 }
 
 /**
