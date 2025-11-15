@@ -322,10 +322,37 @@ int core_bt_dinput_start(void)
     // Pairing status
     // ------------------------------------------------------
     if (memcmp(global_loaded_settings.paired_host_dinput_mac, zero, 6) != 0) {
-        _dinput_paired = true;
-        ESP_LOGI(TAG,
-            "Stored DInput paired host found — enabling autoconnect");
-    } else {
+
+        // ------------------------------------------------------
+        // SAFETY FIX:
+        // If paired-host MAC equals OUR OWN MAC → INVALID.
+        // This happens after long-sync resets and causes
+        // endless autoconnect failures.
+        // ------------------------------------------------------
+        if (memcmp(global_loaded_settings.paired_host_dinput_mac,
+                   tmpmac, 6) == 0)
+        {
+            ESP_LOGW(TAG,
+                "Paired host matches device MAC — forcing discoverable mode");
+
+            memset(global_loaded_settings.paired_host_dinput_mac, 0, 6);
+            app_settings_save();
+
+            _dinput_paired = false;
+
+            esp_bt_gap_set_scan_mode(
+                ESP_BT_CONNECTABLE,
+                ESP_BT_GENERAL_DISCOVERABLE
+            );
+        }
+        else
+        {
+            _dinput_paired = true;
+            ESP_LOGI(TAG,
+                "Stored DInput paired host found — enabling autoconnect");
+        }
+    }
+    else {
         _dinput_paired = false;
         ESP_LOGI(TAG, "No paired host — entering discoverable mode");
         esp_bt_gap_set_scan_mode(

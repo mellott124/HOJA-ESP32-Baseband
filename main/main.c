@@ -248,8 +248,18 @@ static void controller_task(void* arg)
                 ESP_LOGW(TAG, "Long-press → factory reset");
                 led_set_state(LED_ERROR);
                 vTaskDelay(pdMS_TO_TICKS(250));
-                memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
-                app_settings_save();
+            
+				// Clear ALL pairing data, not just Switch
+				memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
+				global_loaded_settings.has_paired_switch = false;
+
+				memset(global_loaded_settings.paired_host_dinput_mac, 0, 6);
+				global_loaded_settings.has_paired_dinput = false;
+
+				memset(global_loaded_settings.paired_host_sinput_mac, 0, 6);
+				global_loaded_settings.has_paired_sinput = false;
+
+				app_settings_save();
                 esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
                 led_set_state(LED_PAIRING);
                 vTaskDelay(pdMS_TO_TICKS(250));
