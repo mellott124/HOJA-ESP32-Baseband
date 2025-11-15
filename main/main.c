@@ -84,7 +84,7 @@ static void select_boot_mode_from_right_dpad(void)
     } else if (c_right_pressed) {
         current_mode = INPUT_MODE_NES;     // NES Controller
     } else if (c_down_pressed) {
-        current_mode = INPUT_MODE_DINPUT;  // DInput Controller
+        current_mode = INPUT_MODE_N64;  // DInput Controller
     } else {
         //current_mode = current_mode;     // default.  Use the global above.
     }
