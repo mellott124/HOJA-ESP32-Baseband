@@ -168,52 +168,45 @@ void ns_set_imu_mode(uint8_t mode)
 
 void ns_report_setinputreport_full(uint8_t *buffer)
 {
-    // Nintendo Switch expects 48 bytes total
-    // 0x30 = Input report ID
-    //buffer[1] = 0x30; //This is handled by later function calls
+    // buffer[0] is set by ns_report_settimer()
+    // buffer[1] is set by ns_report_setbattconn()
 
-    // Byte[0]: timer (increments every frame)
-    // static uint8_t timer = 0;
-    // buffer[0] = timer++;
-	//Using fixed ns_report_settimer now down in _switch_bt_task_standard like HOJA did.
-    
-    // Byte[1]: battery + connection
-    // 0x8E = full battery, connected via Bluetooth
-    //buffer[1] = 0x8E;
+    // -------------------------------
+    // Button bytes (correct positions)
+    // -------------------------------
+    buffer[2] = _switch_input_data.right_buttons;   // A/B/X/Y/R/ZR/L/ZL
+    buffer[3] = _switch_input_data.shared_buttons;  // minus/plus/LS/RS/home/capture
+    buffer[4] = _switch_input_data.left_buttons;    // D-pad HAT ENCODES here
 
-    // Bytes[2–4]: button data
-    // bit order:
-    //   byte2: A/B/X/Y/R/ZR/L/ZL
-    //   byte3: Minus/Plus/RS/LS/Home/Capture
-    //   byte4: D-pad + bits
-    buffer[2] = _switch_input_data.right_buttons;
-	buffer[3] = _switch_input_data.shared_buttons;
-	buffer[4] = _switch_input_data.left_buttons;
+    // -------------------------------
+    // LEFT STICK (16-bit little endian)
+    // -------------------------------
+    uint16_t lx = _switch_input_data.ls_x;  // already 0–4095 or 0–65535 depending on your input system
+    uint16_t ly = _switch_input_data.ls_y;
 
-    // --- Left stick (12-bit packed: X/Y) ---
-    uint16_t lx = _switch_input_data.ls_x & 0x0FFF;
-    uint16_t ly = _switch_input_data.ls_y & 0x0FFF;
+    buffer[5] = lx & 0xFF;
+    buffer[6] = (lx >> 8) & 0xFF;
+    buffer[7] = ly & 0xFF;
+    buffer[8] = (ly >> 8) & 0xFF;
 
-    // Left stick: bytes 6–8
-    buffer[5]  = lx & 0xFF;
-    buffer[6]  = ((ly & 0x0F) << 4) | ((lx >> 8) & 0x0F);
-    buffer[7]  = (ly >> 4) & 0xFF;
+    // -------------------------------
+    // RIGHT STICK (16-bit little endian)
+    // -------------------------------
+    uint16_t rx = _switch_input_data.rs_x;
+    uint16_t ry = _switch_input_data.rs_y;
 
-	// --- Right stick (12-bit packed: X/Y) ---
-	uint16_t rx = _switch_input_data.rs_x & 0x0FFF;
-    uint16_t ry = _switch_input_data.rs_y & 0x0FFF;
-	
-    // Right stick: bytes 9–11
-    buffer[8]  = rx & 0xFF;
-    buffer[9] = ((ry & 0x0F) << 4) | ((rx >> 8) & 0x0F);
-    buffer[10] = (ry >> 4) & 0xFF;
+    buffer[9]  = rx & 0xFF;
+    buffer[10] = (rx >> 8) & 0xFF;
+    buffer[11] = ry & 0xFF;
+    buffer[12] = (ry >> 8) & 0xFF;
 
-    // Fill remaining bytes with zeros (rumble, subcmd replies, etc.)
-    for (int i = 11; i < 48; i++) {
+    // -------------------------------
+    // Motion block (all zeros OK)
+    // -------------------------------
+    for (int i = 13; i < 48; i++) {
         buffer[i] = 0x00;
     }
 }
-
 
 
 void _ns_reset_report_spacer()
@@ -651,32 +644,37 @@ void _switch_bt_task_standard(void *parameters)
     static ns_report_mode_t _report_mode = NS_REPORT_MODE_FULL;
     _hid_connected = false;
 
+    // HOJA pacing: spacing configured here
     app_set_report_timer(DEFAULT_US_DELAY);
 
     for (;;)
-	{
-		// Handle deferred shutdown requests from GAP callback
-		if (ulTaskNotifyTake(pdTRUE, 0)) {
-			ESP_LOGI("_switch_bt_task_standard", "Delete requested, exiting task cleanly");
-			vTaskDelete(NULL); // self-delete safely
-		}
+    {
+        // Handle deferred shutdown requests from GAP callback
+        if (ulTaskNotifyTake(pdTRUE, 0)) {
+            ESP_LOGI("_switch_bt_task_standard",
+                     "Delete requested, exiting task cleanly");
+            vTaskDelete(NULL); // self-delete safely
+        }
 
-		static uint8_t _full_buffer[64] = {0};
+        static uint8_t _full_buffer[SWITCH_BT_REPORT_SIZE] = {0};
         uint8_t tmp[64] = {0x00, 0x00};
 
-        // Only send when connected
         if (_hid_connected)
         {
+            // ---------------------------------------------
+            // Restore HOJA pacing:
+            // Only send when _ns_send_check_nonblocking() says it's time
+            // ---------------------------------------------
             if (_ns_send_check_nonblocking())
             {
                 if (_report_mode == NS_REPORT_MODE_FULL)
                 {
-                    ns_report_clear(_full_buffer, 64);
+                    ns_report_clear(_full_buffer, SWITCH_BT_REPORT_SIZE);
                     ns_report_setinputreport_full(_full_buffer);
-					ns_report_settimer(_full_buffer);
+                    ns_report_settimer(_full_buffer);
                     ns_report_setbattconn(_full_buffer);
 
-                    // Debug: log first few button bytes to confirm dynamic input
+                    // Debug for button changes
 #if 1
                     static uint8_t last_btn[3] = {0};
                     bool changed = false;
@@ -692,21 +690,32 @@ void _switch_bt_task_standard(void *parameters)
                         memcpy(last_btn, &_full_buffer[2], 3);
                     }
 #endif
+
                     if (_hid_connected) {
-						//ESP_LOG_BUFFER_HEX("HID_TX_FINAL", _full_buffer, 16);
-                        esp_bt_hid_device_send_report(ESP_HIDD_REPORT_TYPE_INTRDATA, 0x30, SWITCH_BT_REPORT_SIZE, _full_buffer);
+						//ESP_LOG_BUFFER_HEX("HID_TX_FULL", _full_buffer, SWITCH_BT_REPORT_SIZE);
+                        esp_bt_hid_device_send_report(
+                            ESP_HIDD_REPORT_TYPE_INTRDATA,
+                            0x30,
+                            SWITCH_BT_REPORT_SIZE,
+                            _full_buffer
+                        );
                     }
                 }
                 else
                 {
-                    // Minimal report (used only in handshake mode)
-                    esp_bt_hid_device_send_report(ESP_HIDD_REPORT_TYPE_INTRDATA, 0x00, 1, tmp);
+                    // Minimal report (handshake mode)
+                    esp_bt_hid_device_send_report(
+                        ESP_HIDD_REPORT_TYPE_INTRDATA,
+                        0x00,
+                        1,
+                        tmp
+                    );
                 }
             }
         }
         else
         {
-            // If not connected, sleep lightly to prevent watchdog reset
+            // Not connected → sleep lightly to avoid WDT resets
             vTaskDelay(16 / portTICK_PERIOD_MS);
         }
     }

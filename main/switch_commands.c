@@ -43,9 +43,9 @@ void ns_report_settimer(uint8_t *buffer)
 
 void ns_report_setbattconn(uint8_t *buffer)
 {
-    uint8_t battery_level = 8;  // 0–8
-    uint8_t charging = 0;       // 1 if charging
-    uint8_t connection = 1;     // 1 = Bluetooth
+    // uint8_t battery_level = 8;  // 0–8
+    // uint8_t charging = 0;       // 1 if charging
+    // uint8_t connection = 1;     // 1 = Bluetooth
     //buffer[1] = (battery_level << 4) | (charging << 3) | connection;
 	buffer[1]=0x8E; //hardcoding for now.  We have no active battery charger in VB hardware.
 }
@@ -117,7 +117,7 @@ void ns_report_sub_triggertime(uint8_t *buffer, uint16_t time_10_ms)
 // --------------------------------------------------------------------------
 void ns_subcommand_handler(uint8_t subcommand, uint8_t *data, uint16_t len)
 {
-  uint16_t _report_len = 15;
+  uint16_t _report_len = 15;   // Base size of a 0x21 subcommand reply
 
   ns_report_clear(_switch_input_buffer, 64);
   ns_report_settimer(_switch_input_buffer);
@@ -129,104 +129,119 @@ void ns_subcommand_handler(uint8_t subcommand, uint8_t *data, uint16_t len)
 
   switch (subcommand)
   {
-  case SW_CMD_SET_NFC:
-    printf("Set NFC MCU:\n");
-    ns_report_setack(0x80);
-    break;
+    case SW_CMD_SET_NFC:
+      printf("Set NFC MCU:\n");
+      ns_report_setack(0x80);
+      break;
 
-  case SW_CMD_ENABLE_IMU:
-    printf("Enable IMU: %d\n", data[10]);
-    ns_set_imu_mode(data[10]);
-    ns_report_setack(0x80);
-    break;
+    case SW_CMD_ENABLE_IMU:
+      printf("Enable IMU: %d\n", data[10]);
+      ns_set_imu_mode(data[10]);
+      ns_report_setack(0x80);
+      break;
 
-  case SW_CMD_SET_PAIRING:
-    printf("Set pairing.\n");
-	ns_report_setack(0x80); 
-    break;
+    case SW_CMD_SET_PAIRING:
+      printf("Set pairing.\n");
+      ns_report_setack(0x80);
+      break;
 
-  case SW_CMD_SET_INPUTMODE:
-    printf("Input mode change: %X\n", data[10]);
-    ns_report_setack(0x80);
-    break;
+    case SW_CMD_SET_INPUTMODE:
+      printf("Input mode change: %X\n", data[10]);
+      ns_report_setack(0x80);
+      break;
 
-  case SW_CMD_GET_DEVICEINFO:
-    printf("Get device info.\n");
-    _report_len += 12;
-    ns_report_setack(0x82);
-    ns_report_sub_setdevinfo(_switch_input_buffer);
-    break;
+    case SW_CMD_GET_DEVICEINFO:
+      printf("Get device info.\n");
+      ns_report_setack(0x82);
+      ns_report_sub_setdevinfo(_switch_input_buffer);
+      _report_len += 12;       // Device info payload is 12 bytes
+      break;
 
-  case SW_CMD_SET_SHIPMODE:
-    printf("Set ship mode: %X\n", data[10]);
-    ns_report_setack(0x80);
-    break;
+    case SW_CMD_SET_SHIPMODE:
+      printf("Set ship mode: %X\n", data[10]);
+      ns_report_setack(0x80);
+      break;
 
-  case SW_CMD_SET_HCI:
-    printf("Set HCI %X\n", data[10]);
-    ns_report_setack(0x86);    // <-- ADD THIS
-    switch_bt_end_task();
-    app_set_power_setting(POWER_CODE_OFF);
-    break;
+    case SW_CMD_SET_HCI:
+      printf("Set HCI %X\n", data[10]);
+      ns_report_setack(0x86);
+      switch_bt_end_task();
+      app_set_power_setting(POWER_CODE_OFF);
+      break;
 
-  case SW_CMD_GET_SPI:
-    printf("Read SPI. Address: %X, %X | Len: %d\n", data[11], data[10], data[14]);
-    ns_report_setack(0x90);
-    sw_spi_readfromaddress(_switch_input_buffer, data[11], data[10], data[14]);
-    _report_len += data[14];
-    break;
+    case SW_CMD_GET_SPI:
+      printf("Read SPI. Address: %X, %X | Len: %d\n",
+             data[11], data[10], data[14]);
 
-  case SW_CMD_SET_SPI:
-    printf("Write SPI. Address: %X, %X | Len: %d\n", data[11], data[10], data[14]);
-    ns_report_setack(0x80);
-    break;
+      ns_report_setack(0x90);
+      sw_spi_readfromaddress(_switch_input_buffer,
+                             data[11], data[10], data[14]);
 
-  case SW_CMD_GET_TRIGGERET:
-    printf("Get trigger ET.\n");
-    ns_report_setack(0x83);
-    ns_report_sub_triggertime(_switch_input_buffer, 100);
-    _report_len += 14;
-    break;
+      _report_len += data[14];   // Append SPI payload length
+      break;
 
-  case SW_CMD_ENABLE_VIBRATE:
-    printf("Enable vibration.\n");
-    ns_report_setack(0x80);
-    break;
+    case SW_CMD_SET_SPI:
+      printf("Write SPI. Address: %X, %X | Len: %d\n",
+             data[11], data[10], data[14]);
+      ns_report_setack(0x80);
+      break;
 
-  case SW_CMD_SET_PLAYER:
-    ns_report_setack(0x80);
-    {
-      uint8_t player = data[10] & 0xF;
-      uint8_t set_num = 0;
-      switch (player)
+    case SW_CMD_GET_TRIGGERET:
+      printf("Get trigger ET.\n");
+      ns_report_setack(0x83);
+      ns_report_sub_triggertime(_switch_input_buffer, 100);
+      _report_len += 14;         // Trigger ET payload size
+      break;
+
+    case SW_CMD_ENABLE_VIBRATE:
+      printf("Enable vibration.\n");
+      ns_report_setack(0x80);
+      break;
+
+    case SW_CMD_SET_PLAYER:
+      ns_report_setack(0x80);
       {
-        case 0b1:    set_num = 1; break;
-        case 0b11:   set_num = 2; break;
-        case 0b111:  set_num = 3; break;
-        case 0b1111: set_num = 4; break;
-        case 0b1001: set_num = 5; break;
-        case 0b1010: set_num = 6; break;
-        case 0b1011: set_num = 7; break;
-        case 0b0110: set_num = 8; break;
-        default:     set_num = 1; break;
-      }
-      app_set_connected_status(set_num);
-      printf("Set player: %d\n", set_num);
-    }
-    break;
+        uint8_t player = data[10] & 0xF;
+        uint8_t set_num = 0;
 
-  default:
-    printf("Unhandled: %X\n", subcommand);
-    for (uint16_t i = 0; i < len; i++) printf("%X, ", data[i]);
-    printf("\n");
-    ns_report_setack(0x80);
-    break;
+        switch (player)
+        {
+          case 0b1:    set_num = 1; break;
+          case 0b11:   set_num = 2; break;
+          case 0b111:  set_num = 3; break;
+          case 0b1111: set_num = 4; break;
+          case 0b1001: set_num = 5; break;
+          case 0b1010: set_num = 6; break;
+          case 0b1011: set_num = 7; break;
+          case 0b0110: set_num = 8; break;
+          default:     set_num = 1; break;
+        }
+
+        app_set_connected_status(set_num);
+        printf("Set player: %d\n", set_num);
+      }
+      break;
+
+    default:
+      printf("Unhandled: %X\n", subcommand);
+      for (uint16_t i = 0; i < len; i++)
+        printf("%X, ", data[i]);
+      printf("\n");
+      ns_report_setack(0x80);
+      break;
   }
 
+  //
+  // *** CRITICAL FIX: SEND THE CORRECT REPORT LENGTH ***
+  //
   esp_bt_hid_device_send_report(
-    ESP_HIDD_REPORT_TYPE_INTRDATA, 0x21,
-    SWITCH_BT_REPORT_SIZE, _switch_input_buffer);
+    ESP_HIDD_REPORT_TYPE_INTRDATA,
+    0x21,
+    _report_len,                  // <-- FIXED: dynamic length
+    _switch_input_buffer
+  );
 }
+
 
 // --------------------------------------------------------------------------
 void ns_report_handler(uint8_t report_id, uint8_t *data, uint16_t len)
