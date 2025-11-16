@@ -296,22 +296,52 @@ int core_bt_dinput_start(void)
 
     const uint8_t zero[6] = {0};
 
-    // Case 1: stored MAC is valid
-    if (memcmp(global_loaded_settings.device_mac_dinput, zero, 6) != 0) {
-        ESP_LOGI(TAG, "Using stored DInput MAC.");
-        memcpy(tmpmac, global_loaded_settings.device_mac_dinput, 6);
-    }
-    // Case 2: stored MAC is zero → regenerate from EFUSE
-    else {
-        ESP_LOGI(TAG, "Generating new DInput MAC from efuse base.");
-        memcpy(tmpmac, base_mac, 6);
-        tmpmac[5] -= 2;      // Espressif rule for BT Classic
+    // ------------------------------------------------------
+	// Validate or regenerate DInput device MAC
+	// ------------------------------------------------------
+	bool mac_valid = true;
 
-        // Save the new MAC
-        memcpy(global_loaded_settings.device_mac_dinput, tmpmac, 6);
-        app_settings_save();
-        ESP_LOGI(TAG, "Saved new DInput MAC.");
-    }
+	// Reject all-zero MAC
+	if (memcmp(global_loaded_settings.device_mac_dinput, zero, 6) == 0) {
+		mac_valid = false;
+	}
+
+	// Reject EFUSE collisions (must not match base MAC)
+	if (memcmp(global_loaded_settings.device_mac_dinput, base_mac, 6) == 0) {
+		mac_valid = false;
+	}
+
+	// Reject illegal Espressif addresses (must be base_mac - 2)
+	uint8_t expected_mac[6];
+	memcpy(expected_mac, base_mac, 6);
+	expected_mac[5] -= 2;
+
+	if (memcmp(global_loaded_settings.device_mac_dinput, expected_mac, 6) != 0) {
+		mac_valid = false;
+	}
+
+	// If invalid → regenerate and save
+	if (!mac_valid) {
+		ESP_LOGW(TAG, "Invalid DInput MAC detected — regenerating.");
+
+		memcpy(tmpmac, base_mac, 6);
+		tmpmac[5] -= 2;  // required for BT Classic
+
+		memcpy(global_loaded_settings.device_mac_dinput, tmpmac, 6);
+		app_settings_save();
+
+		ESP_LOGI(TAG,
+			"Saved regenerated DInput MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+			tmpmac[0], tmpmac[1], tmpmac[2],
+			tmpmac[3], tmpmac[4], tmpmac[5]);
+	}
+	else {
+		memcpy(tmpmac, global_loaded_settings.device_mac_dinput, 6);
+		ESP_LOGI(TAG,
+			"Using stored DInput MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+			tmpmac[0], tmpmac[1], tmpmac[2],
+			tmpmac[3], tmpmac[4], tmpmac[5]);
+	}
 
     ESP_LOGI(TAG,
         "Final DInput BT MAC: %02X:%02X:%02X:%02X:%02X:%02X",
