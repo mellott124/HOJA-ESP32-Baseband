@@ -89,13 +89,24 @@ static void select_boot_mode_from_right_dpad(void)
         //current_mode = current_mode;     // default.  Use the global above.
     }
 
-    ESP_LOGI(TAG, "Selected mode: %s",
-        current_mode == INPUT_MODE_SWPRO ? "Pro Controller" :
-        current_mode == INPUT_MODE_SNES  ? "SNES Controller" :
-        current_mode == INPUT_MODE_NES   ? "NES Controller" :
-        current_mode == INPUT_MODE_N64   ? "N64 Controller" :
-		current_mode == INPUT_MODE_DINPUT   ? "DInput Controller" :
-        "Unknown");
+    if (get_current_mode() == INPUT_MODE_DINPUT) {
+		ESP_LOGI(TAG, "Stored paired host (DInput): %02X:%02X:%02X:%02X:%02X:%02X",
+				 global_loaded_settings.paired_host_dinput_mac[0],
+				 global_loaded_settings.paired_host_dinput_mac[1],
+				 global_loaded_settings.paired_host_dinput_mac[2],
+				 global_loaded_settings.paired_host_dinput_mac[3],
+				 global_loaded_settings.paired_host_dinput_mac[4],
+				 global_loaded_settings.paired_host_dinput_mac[5]);
+	} else {
+		ESP_LOGI(TAG, "Stored paired host (Switch): %02X:%02X:%02X:%02X:%02X:%02X",
+				 global_loaded_settings.paired_host_switch_mac[0],
+				 global_loaded_settings.paired_host_switch_mac[1],
+				 global_loaded_settings.paired_host_switch_mac[2],
+				 global_loaded_settings.paired_host_switch_mac[3],
+				 global_loaded_settings.paired_host_switch_mac[4],
+				 global_loaded_settings.paired_host_switch_mac[5]);
+	}
+
 
     // Optional: visual LED feedback (e.g. blink pattern per mode)
     led_set_state(LED_PAIRING);
@@ -205,6 +216,9 @@ static void restart_factory_reset(void)
     bt_error = false;
 
     memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
+	memset(global_loaded_settings.paired_host_dinput_mac, 0, 6);
+	global_loaded_settings.has_paired_dinput = false;
+	global_loaded_settings.has_paired_switch = false;
     app_settings_save();
 
     led_set_state(LED_ERROR);  
@@ -240,37 +254,58 @@ static void controller_task(void* arg)
         }
 
         if (!combo_now && combo_active) {
-            combo_active = false;
-            int64_t held_ms = (now_us - combo_start_us) / 1000;
-            ESP_LOGI(TAG, "SYNC combo released after %lld ms", held_ms);
+			combo_active = false;
+			int64_t held_ms = (now_us - combo_start_us) / 1000;
+			ESP_LOGI(TAG, "SYNC combo released after %lld ms", held_ms);
 
-            if (held_ms >= 3500) {
-                ESP_LOGW(TAG, "Long-press → factory reset");
-                led_set_state(LED_ERROR);
-                vTaskDelay(pdMS_TO_TICKS(250));
-            
-				// Clear ALL pairing data, not just Switch
-				memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
-				global_loaded_settings.has_paired_switch = false;
+			if (held_ms >= 3500) {
+				ESP_LOGW(TAG, "Long-press → factory reset");
 
-				memset(global_loaded_settings.paired_host_dinput_mac, 0, 6);
-				global_loaded_settings.has_paired_dinput = false;
+				led_set_state(LED_ERROR);
+				vTaskDelay(pdMS_TO_TICKS(250));
 
-				memset(global_loaded_settings.paired_host_sinput_mac, 0, 6);
-				global_loaded_settings.has_paired_sinput = false;
+				input_mode_t mode = get_current_mode();
 
+				switch (mode) {
+
+					case INPUT_MODE_DINPUT:
+						ESP_LOGW(TAG, "Clearing DInput pairing…");
+
+						memset(global_loaded_settings.paired_host_dinput_mac, 0, 6);
+						global_loaded_settings.has_paired_dinput = false;
+
+						// 🔥 ALSO RESET THE DEVICE’S OWN DINPUT MAC
+						memset(global_loaded_settings.device_mac_dinput, 0, 6);
+						ESP_LOGW(TAG, "Cleared device_mac_dinput");
+
+						app_settings_save();
+						break;
+
+					case INPUT_MODE_SWPRO:
+					case INPUT_MODE_SNES:
+					case INPUT_MODE_NES:
+					case INPUT_MODE_N64:
+						ESP_LOGW(TAG, "Clearing Switch-family pairing ONLY");
+						memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
+						global_loaded_settings.has_paired_switch = false;
+						break;
+
+					default:
+						ESP_LOGW(TAG, "Unknown mode — no pairing cleared");
+						break;
+				}
+
+				// Save updated pairing state
 				app_settings_save();
-                esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-                led_set_state(LED_PAIRING);
-                vTaskDelay(pdMS_TO_TICKS(250));
-                restart_factory_reset();
-            } else if (held_ms >= 100) {
-                ESP_LOGI(TAG, "Short-press → reconnect");
-                led_set_state(LED_PAIRING);
-                vTaskDelay(pdMS_TO_TICKS(150));
-                esp_restart();
-            }
-        }
+
+				// Visual feedback + restart
+				esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+				led_set_state(LED_PAIRING);
+				vTaskDelay(pdMS_TO_TICKS(250));
+				esp_restart();
+			}
+		}
+
 
         // =====================================================
         // MAIN CONTROLLER MAPPING (base buttons per mode)
@@ -513,7 +548,7 @@ void app_main(void)
 
     app_settings_load();
     gpio_input_init();
-	haptics_init();
+    haptics_init();
     led_init();
     led_boot_sweep();
     led_set_state(LED_IDLE);
@@ -522,68 +557,93 @@ void app_main(void)
     select_boot_mode_from_right_dpad();
 
     // Optional LED feedback per mode
-	switch (get_current_mode()) {
-		case INPUT_MODE_SWPRO: led_set_state(LED_PAIRING); break;   // Amber
-		case INPUT_MODE_SNES:  led_set_state(LED_CONNECTED); break; // Green
-		case INPUT_MODE_NES:   led_set_state(LED_CONNECTED); break; // Green (same as SNES)
-		case INPUT_MODE_DINPUT: led_set_state(LED_DINPUT); break;   // Purple
-		case INPUT_MODE_N64:
-		default:               led_set_state(LED_IDLE); break;      // Blue
-	}
+    switch (get_current_mode()) {
+        case INPUT_MODE_SWPRO:  led_set_state(LED_PAIRING);   break;   // Amber
+        case INPUT_MODE_SNES:   led_set_state(LED_CONNECTED); break;   // Green
+        case INPUT_MODE_NES:    led_set_state(LED_CONNECTED); break;   // Green
+        case INPUT_MODE_DINPUT: led_set_state(LED_DINPUT);    break;   // Purple
+        case INPUT_MODE_N64:
+        default:                led_set_state(LED_IDLE);      break;   // Blue
+    }
 
     uint8_t base_mac[6];
     esp_read_mac(base_mac, ESP_MAC_BT);
     ESP_LOGI(TAG, "Applying base BT MAC: %02X:%02X:%02X:%02X:%02X:%02X",
              base_mac[0], base_mac[1], base_mac[2],
              base_mac[3], base_mac[4], base_mac[5]);
+
     esp_base_mac_addr_set(base_mac);
 
-    ESP_LOGI(TAG, "Stored paired host: %02X:%02X:%02X:%02X:%02X:%02X",
-         global_loaded_settings.paired_host_switch_mac[0],
-         global_loaded_settings.paired_host_switch_mac[1],
-         global_loaded_settings.paired_host_switch_mac[2],
-         global_loaded_settings.paired_host_switch_mac[3],
-         global_loaded_settings.paired_host_switch_mac[4],
-         global_loaded_settings.paired_host_switch_mac[5]);
+    // ------------------------------------------------------
+    // FIXED: Correctly display the stored paired host per mode
+    // ------------------------------------------------------
+    switch (get_current_mode())
+    {
+        case INPUT_MODE_DINPUT:
+            ESP_LOGI(TAG, "Stored paired host (DInput): %02X:%02X:%02X:%02X:%02X:%02X",
+                global_loaded_settings.paired_host_dinput_mac[0],
+                global_loaded_settings.paired_host_dinput_mac[1],
+                global_loaded_settings.paired_host_dinput_mac[2],
+                global_loaded_settings.paired_host_dinput_mac[3],
+                global_loaded_settings.paired_host_dinput_mac[4],
+                global_loaded_settings.paired_host_dinput_mac[5]);
+            break;
 
+        case INPUT_MODE_SWPRO:
+        case INPUT_MODE_SNES:
+        case INPUT_MODE_NES:
+        case INPUT_MODE_N64:
+        default:
+            ESP_LOGI(TAG, "Stored paired host (Switch): %02X:%02X:%02X:%02X:%02X:%02X",
+                global_loaded_settings.paired_host_switch_mac[0],
+                global_loaded_settings.paired_host_switch_mac[1],
+                global_loaded_settings.paired_host_switch_mac[2],
+                global_loaded_settings.paired_host_switch_mac[3],
+                global_loaded_settings.paired_host_switch_mac[4],
+                global_loaded_settings.paired_host_switch_mac[5]);
+            break;
+    }
 
-	// Log which Switch controller identity is being emulated
-	ESP_LOGI(TAG, "Emulating as: %s",
-    get_current_mode() == INPUT_MODE_SWPRO ? "Pro Controller" :
-    get_current_mode() == INPUT_MODE_SNES  ? "SNES Controller" :
-    get_current_mode() == INPUT_MODE_NES   ? "NES Controller" :
-    get_current_mode() == INPUT_MODE_N64   ? "N64 Controller" : "Unknown");
+    // Log emulated identity
+    ESP_LOGI(TAG, "Emulating as: %s",
+        get_current_mode() == INPUT_MODE_SWPRO ? "Pro Controller" :
+        get_current_mode() == INPUT_MODE_SNES  ? "SNES Controller" :
+        get_current_mode() == INPUT_MODE_NES   ? "NES Controller" :
+        get_current_mode() == INPUT_MODE_N64   ? "N64 Controller" :
+        get_current_mode() == INPUT_MODE_DINPUT ? "DInput Controller" :
+        "Unknown");
 
     int bt_status = 0;
-	switch (get_current_mode()) {
-		case INPUT_MODE_DINPUT:
-			ESP_LOGI(TAG, "Starting DInput mode...");
-			bt_status = core_bt_dinput_start();
-			break;
 
-		case INPUT_MODE_SWPRO:
-		case INPUT_MODE_SNES:
-		case INPUT_MODE_NES:
-		case INPUT_MODE_N64:
-		default:
-			ESP_LOGI(TAG, "Starting Switch mode...");
-			bt_status = core_bt_switch_start();
-			break;
-	}
+    switch (get_current_mode()) {
+        case INPUT_MODE_DINPUT:
+            ESP_LOGI(TAG, "Starting DInput mode...");
+            bt_status = core_bt_dinput_start();
+            break;
 
-	if (bt_status == ESP_OK) {
-		led_set_state(LED_PAIRING);
-	} else {
-		led_set_state(LED_ERROR);
-	}
+        case INPUT_MODE_SWPRO:
+        case INPUT_MODE_SNES:
+        case INPUT_MODE_NES:
+        case INPUT_MODE_N64:
+        default:
+            ESP_LOGI(TAG, "Starting Switch mode...");
+            bt_status = core_bt_switch_start();
+            break;
+    }
 
+    if (bt_status == ESP_OK) {
+        led_set_state(LED_PAIRING);
+    } else {
+        led_set_state(LED_ERROR);
+    }
 
     esp_read_mac(global_live_data.current_mac, ESP_MAC_BT);
     ESP_LOGI(TAG, "Post-start BT MAC: %02X:%02X:%02X:%02X:%02X:%02X",
-             global_live_data.current_mac[0],global_live_data.current_mac[1],
-             global_live_data.current_mac[2],global_live_data.current_mac[3],
-             global_live_data.current_mac[4],global_live_data.current_mac[5]);
+             global_live_data.current_mac[0], global_live_data.current_mac[1],
+             global_live_data.current_mac[2], global_live_data.current_mac[3],
+             global_live_data.current_mac[4], global_live_data.current_mac[5]);
 
     bt_pairing = true;
     xTaskCreatePinnedToCore(controller_task, "controller_task", 4096, NULL, 1, NULL, 1);
 }
+
