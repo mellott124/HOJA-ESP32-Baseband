@@ -25,6 +25,8 @@ uint8_t _switch_imu_mode = 0x00;
 interval_s _ns_interval = {0};
 sw_input_s _switch_input_data = {.ls_x = 2047, .ls_y = 2047, .rs_x = 2047, .rs_y = 2047};
 
+extern void app_settings_save(void);
+
 const uint8_t procon_hid_descriptor[PROCON_HID_REPORT_MAP_LEN] = {
     0x05, 0x01,        // Usage Page (Generic Desktop Ctrls)
     0x09, 0x05,        // Usage (Game Pad)
@@ -512,41 +514,106 @@ int core_bt_switch_start(void)
     // Convert calibration data
     switch_analog_calibration_init();
 
-    uint8_t tmpmac[6] = {0};
-    uint8_t *mac = global_live_data.current_mac;
+    // ------------------------------------------------------
+	// Correct MAC handling: EFUSE fallback + save
+	// ------------------------------------------------------
+	uint8_t base_mac[6];
+	esp_efuse_mac_get_default(base_mac);
 
-    if ((mac[0] == 0) && (mac[1] == 0)) {
-        mac = global_loaded_settings.device_mac_switch;
-    }
+	ESP_LOGI(TAG,
+		"EFUSE base MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+		base_mac[0], base_mac[1], base_mac[2],
+		base_mac[3], base_mac[4], base_mac[5]);
 
-    memcpy(tmpmac, mac, 6);
-    // On ESP32, the Bluetooth address is the base MAC with the last octet -= 2
-    tmpmac[5] -= 2;
+	const uint8_t zero[6] = {0};
 
-    // --------------------------------------------------
-    // Force paired flag if a stored host MAC exists
-    // --------------------------------------------------
-    const uint8_t zero_mac[6] = {0};
-    if (memcmp(global_loaded_settings.paired_host_switch_mac, zero_mac, 6) != 0) {
-        _switch_paired = true;
-        ESP_LOGI(TAG,
-                 "Detected stored paired host %02X:%02X:%02X:%02X:%02X:%02X — enabling quick reconnect",
-                 global_loaded_settings.paired_host_switch_mac[0],
-                 global_loaded_settings.paired_host_switch_mac[1],
-                 global_loaded_settings.paired_host_switch_mac[2],
-                 global_loaded_settings.paired_host_switch_mac[3],
-                 global_loaded_settings.paired_host_switch_mac[4],
-                 global_loaded_settings.paired_host_switch_mac[5]);
+	bool mac_valid = true;
 
-        // Bullet-proof fallback:
-        ESP_LOGI(TAG, "Quick reconnect path enabled");
-    } else {
-        _switch_paired = false;
-        ESP_LOGI(TAG, "No stored paired host found — entering pairing mode.");
+	// Reject all-zero MAC
+	if (memcmp(global_loaded_settings.device_mac_switch, zero, 6) == 0) {
+		mac_valid = false;
+	}
 
-        // Safety: always re-advertise so we never get stuck invisible
-        esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-    }
+	// Reject EFUSE collisions (must not match base MAC)
+	if (memcmp(global_loaded_settings.device_mac_switch, base_mac, 6) == 0) {
+		mac_valid = false;
+	}
+
+	// Reject illegal Espressif addresses (must be base_mac + 2 for Switch)
+	uint8_t expected_mac[6];
+	memcpy(expected_mac, base_mac, 6);
+	expected_mac[5] += 2;
+
+	if (memcmp(global_loaded_settings.device_mac_switch, expected_mac, 6) != 0) {
+		mac_valid = false;
+	}
+
+	uint8_t tmpmac[6];
+
+	// If invalid → regenerate and save
+	if (!mac_valid) {
+		ESP_LOGW(TAG, "Invalid Switch MAC detected — regenerating.");
+
+		memcpy(tmpmac, base_mac, 6);
+		tmpmac[5] += 2;  // required unique BT Classic MAC variant
+
+		memcpy(global_loaded_settings.device_mac_switch, tmpmac, 6);
+		app_settings_save();
+
+		ESP_LOGI(TAG,
+			"Saved regenerated Switch MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+			tmpmac[0], tmpmac[1], tmpmac[2],
+			tmpmac[3], tmpmac[4], tmpmac[5]);
+	}
+	else {
+		memcpy(tmpmac, global_loaded_settings.device_mac_switch, 6);
+		ESP_LOGI(TAG,
+			"Using stored Switch MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+			tmpmac[0], tmpmac[1], tmpmac[2],
+			tmpmac[3], tmpmac[4], tmpmac[5]);
+	}
+
+	ESP_LOGI(TAG,
+		"Final Switch BT MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+		tmpmac[0], tmpmac[1], tmpmac[2],
+		tmpmac[3], tmpmac[4], tmpmac[5]);
+
+	// ------------------------------------------------------
+	// Pairing status
+	// ------------------------------------------------------
+	if (memcmp(global_loaded_settings.paired_host_switch_mac, zero, 6) != 0) {
+
+		// SAFETY FIX:
+		// If paired-host MAC equals OUR OWN MAC → INVALID.
+		if (memcmp(global_loaded_settings.paired_host_switch_mac, tmpmac, 6) == 0)
+		{
+			ESP_LOGW(TAG,
+				"Paired host matches device MAC — forcing discoverable mode");
+
+			memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
+			app_settings_save();
+
+			_switch_paired = false;
+
+			esp_bt_gap_set_scan_mode(
+				ESP_BT_CONNECTABLE,
+				ESP_BT_GENERAL_DISCOVERABLE
+			);
+		}
+		else {
+			_switch_paired = true;
+			ESP_LOGI(TAG,
+				"Stored Switch paired host found — enabling autoconnect");
+		}
+	}
+	else {
+		_switch_paired = false;
+		ESP_LOGI(TAG, "No paired host — entering discoverable mode");
+		esp_bt_gap_set_scan_mode(
+			ESP_BT_CONNECTABLE,
+			ESP_BT_GENERAL_DISCOVERABLE
+		);
+	}
 
     // --------------------------------------------------
     // Initialize Bluetooth with valid MAC

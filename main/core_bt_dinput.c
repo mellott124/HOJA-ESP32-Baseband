@@ -280,7 +280,6 @@ int core_bt_dinput_start(void)
     ESP_LOGI(TAG, "Starting DInput Bluetooth stack...");
 
     int err = 1;
-
     uint8_t tmpmac[6] = {0};
 
     // ------------------------------------------------------

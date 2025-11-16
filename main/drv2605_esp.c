@@ -2,6 +2,8 @@
 
 static const char *TAG = "DRV2605";
 
+bool drv2605_available = false;
+
 esp_err_t drv2605_write(uint8_t reg, uint8_t val){
     uint8_t data[2] = { reg, val };
     return i2c_master_write_to_device(DRV2605_I2C_PORT, DRV2605_I2C_ADDR,
@@ -75,8 +77,11 @@ esp_err_t drv2605_init(void) {
 	esp_err_t detect = drv2605_read(DRV2605_REG_STATUS, &status);
 	if (detect != ESP_OK) {
 		ESP_LOGW(TAG, "DRV2605 not detected on I2C bus (no ACK). Disabling haptics.");
+		drv2605_available = false;
 		return ESP_OK;
 	}
+	
+	drv2605_available = true;
 	ESP_LOGI(TAG, "DRV2605 detected, status=0x%02X", status);
 
 	ESP_LOGI(TAG, "DRV2605 initialized (RTP mode, LRA)");
@@ -90,6 +95,10 @@ esp_err_t drv2605_set_mode(uint8_t mode) {
 }
 
 esp_err_t drv2605_set_rtp(uint8_t value) {
+	if (!drv2605_available) {
+		ESP_LOGW(TAG, "Haptics disabled.");
+		return ESP_ERR_INVALID_STATE;
+	}
     esp_err_t err = drv2605_write(DRV2605_REG_RTPIN, value);
     if (err == ESP_OK){
         //ESP_LOGI(TAG, "Set RTP strength=%d", value);
