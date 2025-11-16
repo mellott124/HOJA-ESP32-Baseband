@@ -96,7 +96,7 @@ esp_err_t drv2605_set_mode(uint8_t mode) {
 
 esp_err_t drv2605_set_rtp(uint8_t value) {
 	if (!drv2605_available) {
-		ESP_LOGW(TAG, "Haptics disabled.");
+		ESP_LOGW(TAG, "RTP command received. Haptics are disabled.");
 		return ESP_ERR_INVALID_STATE;
 	}
     esp_err_t err = drv2605_write(DRV2605_REG_RTPIN, value);

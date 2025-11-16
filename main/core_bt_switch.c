@@ -514,106 +514,115 @@ int core_bt_switch_start(void)
     // Convert calibration data
     switch_analog_calibration_init();
 
-    // ------------------------------------------------------
-	// Correct MAC handling: EFUSE fallback + save
-	// ------------------------------------------------------
-	uint8_t base_mac[6];
-	esp_efuse_mac_get_default(base_mac);
+        //------------------------------------------------------
+		// Correct MAC handling: EFUSE fallback + save
+		//------------------------------------------------------
+		uint8_t base_mac[6];
+		esp_efuse_mac_get_default(base_mac);
 
-	ESP_LOGI(TAG,
-		"EFUSE base MAC: %02X:%02X:%02X:%02X:%02X:%02X",
-		base_mac[0], base_mac[1], base_mac[2],
-		base_mac[3], base_mac[4], base_mac[5]);
+		ESP_LOGI("core_bt_switch_start",
+			"EFUSE base MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+			base_mac[0], base_mac[1], base_mac[2],
+			base_mac[3], base_mac[4], base_mac[5]);
 
-	const uint8_t zero[6] = {0};
+		const uint8_t zero[6] = {0};
+		uint8_t tmpmac[6];
 
-	bool mac_valid = true;
+		//------------------------------------------------------
+		// Validate or regenerate Switch device MAC
+		//------------------------------------------------------
+		bool mac_valid = true;
 
-	// Reject all-zero MAC
-	if (memcmp(global_loaded_settings.device_mac_switch, zero, 6) == 0) {
-		mac_valid = false;
-	}
+		// Reject all-zero MAC
+		if (memcmp(global_loaded_settings.device_mac_switch, zero, 6) == 0) {
+			mac_valid = false;
+		}
 
-	// Reject EFUSE collisions (must not match base MAC)
-	if (memcmp(global_loaded_settings.device_mac_switch, base_mac, 6) == 0) {
-		mac_valid = false;
-	}
+		// Reject EFUSE collisions
+		if (memcmp(global_loaded_settings.device_mac_switch, base_mac, 6) == 0) {
+			mac_valid = false;
+		}
 
-	// Reject illegal Espressif addresses (must be base_mac + 2 for Switch)
-	uint8_t expected_mac[6];
-	memcpy(expected_mac, base_mac, 6);
-	expected_mac[5] += 2;
+		// Reject illegal Espressif addresses (must be base_mac - 2)
+		uint8_t expected_mac[6];
+		memcpy(expected_mac, base_mac, 6);
+		expected_mac[5] -= 2;
 
-	if (memcmp(global_loaded_settings.device_mac_switch, expected_mac, 6) != 0) {
-		mac_valid = false;
-	}
+		if (memcmp(global_loaded_settings.device_mac_switch, expected_mac, 6) != 0) {
+			mac_valid = false;
+		}
 
-	uint8_t tmpmac[6];
+		// If invalid → regenerate + save
+		if (!mac_valid) {
+			ESP_LOGW("core_bt_switch_start",
+				"Invalid Switch MAC detected — regenerating.");
 
-	// If invalid → regenerate and save
-	if (!mac_valid) {
-		ESP_LOGW(TAG, "Invalid Switch MAC detected — regenerating.");
+			memcpy(tmpmac, base_mac, 6);
+			tmpmac[5] -= 2;   // required for BT Classic
 
-		memcpy(tmpmac, base_mac, 6);
-		tmpmac[5] += 2;  // required unique BT Classic MAC variant
-
-		memcpy(global_loaded_settings.device_mac_switch, tmpmac, 6);
-		app_settings_save();
-
-		ESP_LOGI(TAG,
-			"Saved regenerated Switch MAC: %02X:%02X:%02X:%02X:%02X:%02X",
-			tmpmac[0], tmpmac[1], tmpmac[2],
-			tmpmac[3], tmpmac[4], tmpmac[5]);
-	}
-	else {
-		memcpy(tmpmac, global_loaded_settings.device_mac_switch, 6);
-		ESP_LOGI(TAG,
-			"Using stored Switch MAC: %02X:%02X:%02X:%02X:%02X:%02X",
-			tmpmac[0], tmpmac[1], tmpmac[2],
-			tmpmac[3], tmpmac[4], tmpmac[5]);
-	}
-
-	ESP_LOGI(TAG,
-		"Final Switch BT MAC: %02X:%02X:%02X:%02X:%02X:%02X",
-		tmpmac[0], tmpmac[1], tmpmac[2],
-		tmpmac[3], tmpmac[4], tmpmac[5]);
-
-	// ------------------------------------------------------
-	// Pairing status
-	// ------------------------------------------------------
-	if (memcmp(global_loaded_settings.paired_host_switch_mac, zero, 6) != 0) {
-
-		// SAFETY FIX:
-		// If paired-host MAC equals OUR OWN MAC → INVALID.
-		if (memcmp(global_loaded_settings.paired_host_switch_mac, tmpmac, 6) == 0)
-		{
-			ESP_LOGW(TAG,
-				"Paired host matches device MAC — forcing discoverable mode");
-
-			memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
+			memcpy(global_loaded_settings.device_mac_switch, tmpmac, 6);
 			app_settings_save();
 
+			ESP_LOGI("core_bt_switch_start",
+				"Saved regenerated Switch MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+				tmpmac[0], tmpmac[1], tmpmac[2],
+				tmpmac[3], tmpmac[4], tmpmac[5]);
+		}
+		else {
+			memcpy(tmpmac, global_loaded_settings.device_mac_switch, 6);
+
+			ESP_LOGI("core_bt_switch_start",
+				"Using stored Switch MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+				tmpmac[0], tmpmac[1], tmpmac[2],
+				tmpmac[3], tmpmac[4], tmpmac[5]);
+		}
+
+		ESP_LOGI("core_bt_switch_start",
+			"Final Switch BT MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+			tmpmac[0], tmpmac[1], tmpmac[2],
+			tmpmac[3], tmpmac[4], tmpmac[5]);
+
+
+		//------------------------------------------------------
+		// Pairing status (MATCHED TO DINPUT LOGIC)
+		//------------------------------------------------------
+		if (memcmp(global_loaded_settings.paired_host_switch_mac, zero, 6) != 0) {
+
+			// SAFETY FIX:
+			// If paired-host MAC == our own → INVALID
+			if (memcmp(global_loaded_settings.paired_host_switch_mac,
+					   tmpmac, 6) == 0)
+			{
+				ESP_LOGW("core_bt_switch_start",
+					"Paired host matches device MAC — forcing discoverable mode");
+
+				memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
+				app_settings_save();
+
+				_switch_paired = false;
+
+				esp_bt_gap_set_scan_mode(
+					ESP_BT_CONNECTABLE,
+					ESP_BT_GENERAL_DISCOVERABLE
+				);
+			}
+			else {
+				_switch_paired = true;
+				ESP_LOGI("core_bt_switch_start",
+					"Stored Switch paired host found — enabling autoconnect");
+			}
+		}
+		else {
 			_switch_paired = false;
+			ESP_LOGI("core_bt_switch_start",
+				"No paired host — entering discoverable mode");
 
 			esp_bt_gap_set_scan_mode(
 				ESP_BT_CONNECTABLE,
 				ESP_BT_GENERAL_DISCOVERABLE
 			);
 		}
-		else {
-			_switch_paired = true;
-			ESP_LOGI(TAG,
-				"Stored Switch paired host found — enabling autoconnect");
-		}
-	}
-	else {
-		_switch_paired = false;
-		ESP_LOGI(TAG, "No paired host — entering discoverable mode");
-		esp_bt_gap_set_scan_mode(
-			ESP_BT_CONNECTABLE,
-			ESP_BT_GENERAL_DISCOVERABLE
-		);
-	}
+
 
     // --------------------------------------------------
     // Initialize Bluetooth with valid MAC
@@ -737,4 +746,7 @@ void switch_bt_sendinput(i2cinput_input_s *input)
     _switch_input_data.sb_left  = input->button_stick_left;
     _switch_input_data.sb_right = input->button_stick_right;
 }
+
+
+
 
