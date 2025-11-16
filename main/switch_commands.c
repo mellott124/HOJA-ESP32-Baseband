@@ -46,7 +46,8 @@ void ns_report_setbattconn(uint8_t *buffer)
     uint8_t battery_level = 8;  // 0–8
     uint8_t charging = 0;       // 1 if charging
     uint8_t connection = 1;     // 1 = Bluetooth
-    buffer[2] = (battery_level << 4) | (charging << 3) | connection;
+    //buffer[1] = (battery_level << 4) | (charging << 3) | connection;
+	buffer[1]=0x8E; //hardcoding for now.  We have no active battery charger in VB hardware.
 }
 
 // --------------------------------------------------------------------------

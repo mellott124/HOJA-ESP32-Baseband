@@ -64,7 +64,7 @@ uint8_t _i2c_buffer_in[32];
 // --------------------------------------------------------------------------
 // MODE MANAGEMENT
 // --------------------------------------------------------------------------
-static input_mode_t current_mode = INPUT_MODE_DINPUT;
+static input_mode_t current_mode = INPUT_MODE_N64;
 input_mode_t get_current_mode(void) { return current_mode; }
 
 // --------------------------------------------------------------------------
@@ -84,9 +84,9 @@ static void select_boot_mode_from_right_dpad(void)
     } else if (c_right_pressed) {
         current_mode = INPUT_MODE_NES;     // NES Controller
     } else if (c_down_pressed) {
-        current_mode = INPUT_MODE_N64;  // DInput Controller
+        current_mode = INPUT_MODE_DINPUT;  // DInput Controller
     } else {
-        //current_mode = current_mode;     // default.  Use the global above.
+        current_mode = current_mode;     // default.  Use the global above.
     }
 
     if (get_current_mode() == INPUT_MODE_DINPUT) {
@@ -150,7 +150,7 @@ void app_settings_load(void)
     nvs_close(h);
 
     // ---------------------------------------------------------------------
-    // 🧩 Ensure new pairing flags exist and are valid
+    // Ensure new pairing flags exist and are valid
     // ---------------------------------------------------------------------
     if (!global_loaded_settings.has_paired_switch &&
         memcmp(global_loaded_settings.paired_host_switch_mac, "\0\0\0\0\0\0", 6) != 0) {
@@ -162,7 +162,7 @@ void app_settings_load(void)
     }
 
     // ---------------------------------------------------------------------
-    // 🧱 Initialize the new DInput device MAC if missing
+    // Initialize the new DInput device MAC if missing
     // ---------------------------------------------------------------------
     if (memcmp(global_loaded_settings.device_mac_dinput, "\0\0\0\0\0\0", 6) == 0) {
         ESP_LOGI(TAG, "Generating independent DInput MAC from Switch MAC...");
@@ -173,7 +173,7 @@ void app_settings_load(void)
     }
 
     // ---------------------------------------------------------------------
-    // ⚙️ Validate struct magic and reset if needed
+    // Validate struct magic and reset if needed
     // ---------------------------------------------------------------------
     if (global_loaded_settings.magic != HOJA_MAGIC_NUM) {
         ESP_LOGW(TAG, "Settings invalid — restoring defaults");
@@ -274,7 +274,7 @@ static void controller_task(void* arg)
 						memset(global_loaded_settings.paired_host_dinput_mac, 0, 6);
 						global_loaded_settings.has_paired_dinput = false;
 
-						// 🔥 ALSO RESET THE DEVICE’S OWN DINPUT MAC
+						// ALSO RESET THE DEVICE’S OWN DINPUT MAC
 						memset(global_loaded_settings.device_mac_dinput, 0, 6);
 						ESP_LOGW(TAG, "Cleared device_mac_dinput");
 

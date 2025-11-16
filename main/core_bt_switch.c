@@ -171,12 +171,13 @@ void ns_report_setinputreport_full(uint8_t *buffer)
     //buffer[1] = 0x30; //This is handled by later function calls
 
     // Byte[0]: timer (increments every frame)
-    static uint8_t timer = 0;
-    buffer[0] = timer++;
+    // static uint8_t timer = 0;
+    // buffer[0] = timer++;
+	//Using fixed ns_report_settimer now down in _switch_bt_task_standard like HOJA did.
     
     // Byte[1]: battery + connection
     // 0x8E = full battery, connected via Bluetooth
-    buffer[1] = 0x8E;
+    //buffer[1] = 0x8E;
 
     // Bytes[2–4]: button data
     // bit order:
@@ -311,7 +312,7 @@ void switch_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
     case ESP_BT_GAP_ACL_DISCONN_CMPL_STAT_EVT:
 		ESP_LOGI(TAG, "ACL Disconnect Complete.");
 
-		// 🧩 Defer task deletion safely to avoid crash
+		// Defer task deletion safely to avoid crash
 		if (_switch_bt_task_handle != NULL) {
 			ESP_LOGI(TAG, "Deferring delete of _switch_bt_task_standard");
 			xTaskNotifyGive(_switch_bt_task_handle);
@@ -380,7 +381,7 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
             if (param->start.status == ESP_OK)
             {
                 ESP_LOGI(TAG, "START OK");
-                led_set_state(LED_PAIRING);  // 🟠 Amber while advertising/reconnecting
+                led_set_state(LED_PAIRING);  // Amber while advertising/reconnecting
                 if (_switch_paired) {
 					// Adaptive reconnect timing
 					int64_t uptime_ms = esp_timer_get_time() / 1000;
@@ -405,7 +406,7 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
             else
             {
                 ESP_LOGE(TAG, "START failed!");
-                led_set_state(LED_ERROR);    // 🔴 Red on failure
+                led_set_state(LED_ERROR);    // Red on failure
             }
             break;
         }
@@ -419,12 +420,12 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
             {
                 _hid_connected = true;
                 ESP_LOGI(TAG, "CONNECT OK");
-                led_set_state(LED_CONNECTED); // 🟢 Green = connected
+                led_set_state(LED_CONNECTED); // Green = connected
             }
             else
             {
                 ESP_LOGE(TAG, "CONNECT failed!");
-                led_set_state(LED_ERROR);     // 🔴 Red = connection failure
+                led_set_state(LED_ERROR);     // Red = connection failure
             }
             break;
         }
@@ -441,13 +442,13 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
             {
                 ESP_LOGI(TAG, "DISCONNECT OK");
                 // Return to advertising mode for pairing
-                led_set_state(LED_PAIRING);   // 🟠 Amber while re-advertising
+                led_set_state(LED_PAIRING);   // Amber while re-advertising
                 esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
             }
             else
             {
                 ESP_LOGE(TAG, "DISCONNECT failed!");
-                led_set_state(LED_ERROR);     // 🔴 Red on disconnect error
+                led_set_state(LED_ERROR);     // Red on disconnect error
             }
             break;
         }
@@ -490,7 +491,7 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
         {
             ESP_LOGI(TAG, "HID STOP");
             _hid_connected = false;
-            led_set_state(LED_IDLE);          // 🔵 Blue = idle/sleeping
+            led_set_state(LED_IDLE);          // Blue = idle/sleeping
             break;
         }
 
@@ -537,13 +538,13 @@ int core_bt_switch_start(void)
                  global_loaded_settings.paired_host_switch_mac[4],
                  global_loaded_settings.paired_host_switch_mac[5]);
 
-        // 🟩 Bullet-proof fallback:
+        // Bullet-proof fallback:
         ESP_LOGI(TAG, "Quick reconnect path enabled");
     } else {
         _switch_paired = false;
         ESP_LOGI(TAG, "No stored paired host found — entering pairing mode.");
 
-        // 🟧 Safety: always re-advertise so we never get stuck invisible
+        // Safety: always re-advertise so we never get stuck invisible
         esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
     }
 
@@ -596,8 +597,8 @@ void _switch_bt_task_standard(void *parameters)
                 {
                     ns_report_clear(_full_buffer, 64);
                     ns_report_setinputreport_full(_full_buffer);
-					//ns_report_settimer(_full_buffer);
-                    //ns_report_setbattconn(_full_buffer);
+					ns_report_settimer(_full_buffer);
+                    ns_report_setbattconn(_full_buffer);
 
                     // Debug: log first few button bytes to confirm dynamic input
 #if 1
