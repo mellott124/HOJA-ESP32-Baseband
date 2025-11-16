@@ -26,12 +26,20 @@ void ns_report_setsubcmd(uint8_t *buffer, uint8_t command)
   buffer[13] = command;
 }
 
+// void ns_report_settimer(uint8_t *buffer)
+// {
+  // static uint64_t time;
+  // time = get_timestamp_ms();
+  // buffer[1] = (uint8_t)(time % 0xFF);
+// }
+
 void ns_report_settimer(uint8_t *buffer)
 {
-  static uint64_t time;
-  time = get_timestamp_ms();
-  buffer[1] = (uint8_t)(time % 0xFF);
+    // Byte[0] is the timer (0-255, wraps)
+    static uint8_t timer = 0;
+    buffer[0] = timer++;
 }
+
 
 void ns_report_setbattconn(uint8_t *buffer)
 {
@@ -133,6 +141,7 @@ void ns_subcommand_handler(uint8_t subcommand, uint8_t *data, uint16_t len)
 
   case SW_CMD_SET_PAIRING:
     printf("Set pairing.\n");
+	ns_report_setack(0x80); 
     break;
 
   case SW_CMD_SET_INPUTMODE:
@@ -154,6 +163,7 @@ void ns_subcommand_handler(uint8_t subcommand, uint8_t *data, uint16_t len)
 
   case SW_CMD_SET_HCI:
     printf("Set HCI %X\n", data[10]);
+    ns_report_setack(0x86);    // <-- ADD THIS
     switch_bt_end_task();
     app_set_power_setting(POWER_CODE_OFF);
     break;
