@@ -1,0 +1,217 @@
+# App main at 4008288C
+# App init at 4008289C
+# APP_CPU RESET: 0
+# APP_CPU CLKGATE: 0
+# APP_CPU STALL: 0
+# APP_CACHE_CTRL: 00000030
+# APP CPU STACK PTR: 3FFBD990
+# Hardcoded system : 20: VB
+# GPIO[32]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:1
+# GPIO[5]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:2
+# GPIO[18]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:2
+# GPIO[19]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0
+# GPIO[21]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0
+# GPIO[22]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0
+# GPIO[25]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0
+# GPIO[3]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0
+# GPIO[16]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0
+# GPIO[27]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0
+# GPIO[16]| InputEn: 0| OutputEn: 1| OpenDrain: 1| Pullup: 1| Pulldown: 0| Intr:0
+# GPIO[27]| InputEn: 0| OutputEn: 1| OpenDrain: 1| Pullup: 1| Pulldown: 0| Intr:0
+# GPIO[33]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 0| Pulldown: 1| Intr:0
+I (316) BTDM_INIT: BT controller compile version [0f0c5a2]
+I (326) BTDM_INIT: Bluetooth MAC: 14:33:5c:28:3a:d2
+I (326) phy_init: phy_version 4791,2c4672b,Dec 20 2023,16:06:06
+Coex register Wi-Fi channel change btdm cb faild
+# gid_update_sys: VB
+# bt_hci_cmd_reset
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_read_local_features
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_read_local_version_info
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_read_bd_addr
+# BT_HCI_EVT_CMD_COMPLETE
+# local_name: BlueRetro_VB_3AD2
+# local_bdaddr: 14:33:5C:28:3A:D2
+# bt_hci_cmd_read_buffer_size
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_read_class_of_device
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_read_local_name
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_read_voice_setting
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_read_num_supported_iac
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_read_current_iac_lap
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_set_event_filter
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_write_conn_accept_timeout
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_read_supported_commands
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_write_ssp_mode
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_write_inquiry_mode
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_read_inquiry_rsp_tx_pwr_lvl
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_read_local_ext_features
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_read_stored_link_key
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_read_page_scan_activity
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_read_page_scan_type
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_write_le_host_supp
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_le_read_wl_size
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_le_clear_wl
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_delete_stored_link_key
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_write_class_of_device
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_write_local_name
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_set_event_filter
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_set_event_filter
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_write_auth_enable
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_set_event_mask
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_write_page_scan_activity
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_write_inquiry_scan_activity
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_write_page_scan_type
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_write_page_scan_timeout
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_write_hold_mode_act
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_write_scan_enable
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_write_default_link_policy
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_le_read_buffer_size
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_att_set_le_max_mtu 247
+# bt_hci_cmd_le_set_adv_param
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_le_set_adv_data
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_le_set_scan_rsp_data
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_le_set_adv_enable
+# BT_HCI_EVT_CMD_COMPLETE
+# bt_hci_cmd_le_set_scan_enable
+# bt_hci_cmd_le_set_scan_param_active
+# bt_hci_cmd_le_set_scan_enable
+# bt_hci_cmd_periodic_inquiry
+# BT_HCI_EVT_CMD_COMPLETE
+# opcode: 0x200C error: 0x0C retry: 0
+# bt_hci_cmd_le_set_scan_enable
+# bt_hci_cmd_le_set_scan_param_active
+# bt_hci_cmd_le_set_scan_enable
+# bt_hci_cmd_periodic_inquiry
+# BT_HCI_EVT_CMD_COMPLETE
+# BT_HCI_EVT_CMD_COMPLETE
+# BT_HCI_EVT_CMD_COMPLETE
+# BT_HCI_EVT_CMD_COMPLETE
+# BT_HCI_EVT_CMD_COMPLETE
+# BT_HCI_EVT_CMD_COMPLETE
+# BT_HCI_EVT_CMD_COMPLETE
+# opcode: 0x0403 error: 0x0C retry: 0
+# BT_HCI_EVT_LE_ADVERTISING_REPORT
+# BT_HCI_EVT_LE_ADVERTISING_REPORT
+# BT_HCI_EVT_CONN_REQUEST
+# bt_hci_cmd_accept_conn_req
+# Page dev: 0 type: 0 bdaddr: 14:2B:2F:AE:11:C6
+# BT_HCI_EVT_CMD_STATUS
+# mc_restore: restore sucessful!
+I (866) gpio: GPIO[0]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:0
+# internal_flag_init: External adapter
+I (866) gpio: GPIO[2]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0
+I (866) main_task: Returned from app_main()
+# BT_HCI_EVT_LE_ADVERTISING_REPORT
+# BT_HCI_EVT_LE_ADVERTISING_REPORT
+# BT_HCI_EVT_LE_ADVERTISING_REPORT
+# BT_HCI_EVT_LE_ADVERTISING_REPORT
+# BT_HCI_EVT_ROLE_CHANGE
+# BT_HCI_EVT_CONN_COMPLETE
+# dev: 0 acl_handle: 0x0080
+# bt_hci_cmd_le_set_adv_disable
+# bt_hci_cmd_remote_name_request
+# BT_HCI_EVT_CMD_COMPLETE
+# BT_HCI_EVT_CMD_STATUS
+# BT_HCI_EVT_REMOTE_NAME_REQ_COMPLETE:
+# bt_type_update: dev: 0 type: 5 subtype: 0
+# bt_hci_cmd_exit_periodic_inquiry
+# bt_hci_cmd_le_set_scan_enable
+# bt_hci_cmd_le_set_scan_param_passive
+# bt_hci_cmd_le_set_scan_enable
+# bt_hci_cmd_read_remote_features
+# dev: 0 type: 5:0 Pro Controller
+# BT_HCI_EVT_LE_ADVERTISING_REPORT
+# BT_HCI_EVT_CMD_COMPLETE
+# BT_HCI_EVT_CMD_COMPLETE
+# BT_HCI_EVT_CMD_COMPLETE
+# BT_HCI_EVT_CMD_COMPLETE
+# BT_HCI_EVT_CMD_STATUS
+# BT_HCI_EVT_REMOTE_FEATURES
+# bt_hci_cmd_read_remote_ext_features
+# bt_l2cap_cmd_ext_feat_mask_req
+# BT_HCI_EVT_CMD_STATUS
+# BT_HCI_EVT_REMOTE_EXT_FEATURES
+# BT_L2CAP_INFO_RSP
+# BT_HCI_EVT_LINK_KEY_REQ
+# bt_hci_cmd_link_key_reply
+# BT_HCI_EVT_CMD_COMPLETE
+# BT_HCI_EVT_ENCRYPT_CHANGE
+# BT_L2CAP_CONN_REQ
+# BT_L2CAP_CONF_REQ
+# BT_L2CAP_CONF_RSP
+# BT_L2CAP_CONN_REQ
+# BT_L2CAP_CONF_REQ
+# BT_L2CAP_CONF_RSP
+# bt_hid_sw_init
+# bt_type_update: dev: 0 type: 5 subtype: 0
+# bt_hid_sw_hdlr: Report type change to 30
+# sw_pad_init: no calib, using default
+# sw_pad_init: no calib, using default
+# sw_pad_init: no calib, using default
+# sw_pad_init: no calib, using default
+# bt_hid_sw_init_callback
+# BT_HIDP_SW_SUBCMD_READ_INFO
+# BT_HIDP_SW_SUBCMD_READ_SPI 0x603D
+# 000000 00 08 80 00 08 80 00 08 80 00 08 80 00 08 00 00
+# 000010 00 00
+# BT_HIDP_SW_SUBCMD_READ_SPI 0x6086
+# 000000 0F 30 61 AE 90 D9 D4 14 54 41 15 54 C7 79 00 00
+# 000010 00 00
+# BT_HIDP_SW_SUBCMD_READ_SPI 0x6098
+# 000000 0F 30 61 AE 90 D9 D4 14 54 41 15 54 C7 79 00 00
+# 000010 00 00
+# BT_HIDP_SW_SUBCMD_READ_SPI 0x8010
+# 000000 B2 A1 00 08 80 00 08 80 00 08 80 B2 A1 00 08 80
+# 000010 00 08 00 00 00 00
+# rel_min LX 800 RX 800
+# neutral LX 800 RX 800
+# rel_max LX 800 RX 000
+# rel_min LY 800 RY 000
+# neutral LY 800 RY 800
+# rel_max LY 800 RY 000
+#         LD 0AE RD 0AE
+# bt_type_update: dev: 0 type: 5 subtype: 0
+# BT_HIDP_SW_SUBCMD_EN_RUMBLE
+# sw_pad_init: controller calib loaded
+# sw_pad_init: controller calib loaded
+# sw_pad_init: controller calib loaded
+# sw_pad_init: controller calib loaded

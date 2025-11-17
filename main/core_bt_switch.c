@@ -11,9 +11,6 @@
 #define HCI_MODE_SNIFF                  0x02
 #define HCI_MODE_PARK                   0x03
 
-#define HID_PROD_NSPRO  0x2009
-#define HID_VEND_NSPRO  0x057E
-#define PROCON_HID_REPORT_MAP_LEN 170
 #define DEFAULT_TICK_DELAY (8/portTICK_PERIOD_MS)
 #define DEFAULT_US_DELAY (8*1000)
 
@@ -273,89 +270,79 @@ void switch_bt_end_task()
 void switch_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
 {
     const char *TAG = "switch_bt_gap_cb";
+
     switch (event)
     {
-    case ESP_BT_GAP_DISC_RES_EVT:
-        ESP_LOGI(TAG, "ESP_BT_GAP_DISC_RES_EVT");
-        // esp_log_buffer_hex(TAG, param->disc_res.bda, ESP_BD_ADDR_LEN);
-        break;
-    case ESP_BT_GAP_DISC_STATE_CHANGED_EVT:
-        ESP_LOGI(TAG, "ESP_BT_GAP_DISC_STATE_CHANGED_EVT");
-        break;
-    case ESP_BT_GAP_RMT_SRVCS_EVT:
-        ESP_LOGI(TAG, "ESP_BT_GAP_RMT_SRVCS_EVT");
-        ESP_LOGI(TAG, "%d", param->rmt_srvcs.num_uuids);
-        break;
-    case ESP_BT_GAP_RMT_SRVC_REC_EVT:
-        ESP_LOGI(TAG, "ESP_BT_GAP_RMT_SRVC_REC_EVT");
-        break;
+        case ESP_BT_GAP_DISC_RES_EVT:
+            ESP_LOGI(TAG, "DISC_RES");
+            break;
 
-    case ESP_BT_GAP_ACL_CONN_CMPL_STAT_EVT:
-        ESP_LOGI(TAG, "Setting to non-connectable, non-discoverable");
-        esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
-        ESP_LOGI(TAG, "ACL Connect Complete.");
+        case ESP_BT_GAP_DISC_STATE_CHANGED_EVT:
+            ESP_LOGI(TAG, "DISC_STATE_CHANGED");
+            break;
 
-        // Start input loop task
-        if(_switch_bt_task_handle==NULL)
-        {
-            xTaskCreatePinnedToCore(_switch_bt_task_standard,
-                                "Standard Send Task", 4048,
-                                NULL, 0, &_switch_bt_task_handle, 0);
-        }
-        break;
+        case ESP_BT_GAP_RMT_SRVCS_EVT:
+            ESP_LOGI(TAG, "RMT_SRVCS");
+            break;
 
-    case ESP_BT_GAP_ACL_DISCONN_CMPL_STAT_EVT:
-		ESP_LOGI(TAG, "ACL Disconnect Complete.");
+        case ESP_BT_GAP_RMT_SRVC_REC_EVT:
+            ESP_LOGI(TAG, "RMT_SRVC_REC");
+            break;
 
-		// Defer task deletion safely to avoid crash
-		if (_switch_bt_task_handle != NULL) {
-			ESP_LOGI(TAG, "Deferring delete of _switch_bt_task_standard");
-			xTaskNotifyGive(_switch_bt_task_handle);
-			_switch_bt_task_handle = NULL;
-		}
+        case ESP_BT_GAP_ACL_CONN_CMPL_STAT_EVT:
+            ESP_LOGI(TAG, "ACL CONNECT");
+            esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
 
-		app_set_connected_status(0);
-		app_set_power_setting(POWER_CODE_OFF); // your existing shutdown call
-		break;
-
-    
-    case ESP_BT_GAP_AUTH_CMPL_EVT:
-    {
-        if (param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS)
-        {
-            ESP_LOGI(TAG, "authentication success: %s", param->auth_cmpl.device_name);
-            //esp_log_buffer_hex(TAG, param->auth_cmpl.bda, ESP_BD_ADDR_LEN);
-            
-            if(!_switch_paired)
-            {
-                _switch_paired = true;
-                app_save_host_mac(INPUT_MODE_SWPRO, &param->auth_cmpl.bda[0]);
+            if (_switch_bt_task_handle == NULL) {
+                xTaskCreatePinnedToCore(
+                    _switch_bt_task_standard,
+                    "Standard Send Task",
+                    4048,
+                    NULL,
+                    0,
+                    &_switch_bt_task_handle,
+                    0
+                );
             }
-        }
-        else
-        {
-            ESP_LOGI(TAG, "authentication failed, status:%d", param->auth_cmpl.stat);
-        }
-        break;
-    }
+            break;
 
-    case ESP_BT_GAP_ENC_CHG_EVT:
-    {
+        case ESP_BT_GAP_ACL_DISCONN_CMPL_STAT_EVT:
+            ESP_LOGI(TAG, "ACL DISCONNECT");
 
-        break;
-    }
+            if (_switch_bt_task_handle != NULL) {
+                xTaskNotifyGive(_switch_bt_task_handle);
+                _switch_bt_task_handle = NULL;
+            }
 
-    case ESP_BT_GAP_MODE_CHG_EVT:
-    {
-        // Depreciated, not needed I guess
-        break;
-    }
+            app_set_connected_status(0);
+            app_set_power_setting(POWER_CODE_OFF);
+            break;
 
-    default:
-        ESP_LOGI(TAG, "UNKNOWN GAP EVT: %d", event);
-        break;
+        case ESP_BT_GAP_AUTH_CMPL_EVT:
+            if (param && param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) {
+                ESP_LOGI(TAG, "AUTH OK: %s", param->auth_cmpl.device_name);
+                if (!_switch_paired) {
+                    _switch_paired = true;
+                    app_save_host_mac(INPUT_MODE_SWPRO, &param->auth_cmpl.bda[0]);
+                }
+            } else {
+                ESP_LOGI(TAG, "AUTH FAIL");
+            }
+            break;
+
+        case ESP_BT_GAP_ENC_CHG_EVT:
+            break;
+
+        case ESP_BT_GAP_MODE_CHG_EVT:
+            break;
+
+        // THIS IS THE KEY FIX — safely absorb ALL future/unhandled events
+        default:
+            ESP_LOGD(TAG, "Unhandled GAP event: %d", event);
+            break;
     }
 }
+
 
 // --------------------------------------------------------------------------
 // HID Callback: handles connection, disconnection, and state transitions

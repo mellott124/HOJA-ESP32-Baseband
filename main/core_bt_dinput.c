@@ -152,7 +152,7 @@ void dinput_bt_gap_cb(esp_bt_gap_cb_event_t event,
             break;
 
         case ESP_BT_GAP_AUTH_CMPL_EVT:
-            if (param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) {
+            if (param && param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) {
                 ESP_LOGI(TAG, "authentication success");
 
                 if (!_dinput_paired) {
@@ -161,16 +161,19 @@ void dinput_bt_gap_cb(esp_bt_gap_cb_event_t event,
                                       &param->auth_cmpl.bda[0]);
                 }
             } else {
-                ESP_LOGI(TAG, "auth failed: %d",
-                         param->auth_cmpl.stat);
+                ESP_LOGI(TAG, "auth failed");
             }
             break;
 
+        // ---- SAFETY FIX ----
+        // Absorb ALL other events without touching param
+        // ---------------------
         default:
-            ESP_LOGI(TAG, "GAP EVT: %d", event);
+            ESP_LOGD(TAG, "Unhandled GAP event: %d", event);
             break;
     }
 }
+
 
 // -------------------------------
 // HID Callback

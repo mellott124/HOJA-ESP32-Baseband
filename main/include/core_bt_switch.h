@@ -2,6 +2,9 @@
 #define CORE_BT_SWITCH_H
 
 #define SWITCH_BT_REPORT_SIZE 48
+#define HID_PROD_NSPRO  0x2009
+#define HID_VEND_NSPRO  0x057E
+#define PROCON_HID_REPORT_MAP_LEN 170
 
 // Include any necessary includes from HOJA backend
 #include "hoja_includes.h"
