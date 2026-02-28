@@ -424,20 +424,35 @@ static void controller_task(void* arg)
         input.button_capture = false;
         input.button_stick_left = false;
 
-        // Home and Capture combos (active in all modes)
-        if (sel && trig_l) {
-            input.button_home = true;
-            ESP_LOGI(TAG, "Select + L → HOME");
-        } 
-        else if (sel && trig_r) {
-            input.button_capture = true;
-            ESP_LOGI(TAG, "Select + R → CAPTURE");
-        } 
-        else if (sel && get_current_mode() == INPUT_MODE_N64) {
-            // N64: legacy behavior (Select acts like ZR via stick-click bit)
-            input.button_stick_left = true;
-            ESP_LOGI(TAG, "Select → ZR (N64 mode)");
-        }
+        // =====================================================
+        // ZL + ZR, Home, Capture combos (active in all modes)
+        // =====================================================
+        // --- Triple combo first ---
+		if (sel && trig_l && trig_r) {
+			input.trigger_zl = true;
+			input.trigger_zr = true;
+			ESP_LOGI(TAG, "Select + L + R → ZL + ZR");
+		}
+		// --- Select + L ---
+		else if (sel && trig_l) {
+			input.button_home = true;
+			ESP_LOGI(TAG, "Select + L → HOME");
+		}
+		// --- Select + R ---
+		else if (sel && trig_r) {
+			input.button_capture = true;
+			ESP_LOGI(TAG, "Select + R → CAPTURE");
+		}
+		// --- N64 legacy ---
+		else if (sel && (get_current_mode() == INPUT_MODE_N64)) {
+			input.button_stick_left = true;
+			ESP_LOGI(TAG, "Select → ZR (N64 mode)");
+		}
+		
+		//VB USB adapter XInput supports VBGo combos. 
+		//Not sure if those are already supported via my Cpad button inputs. Needs tested.
+		//trig_l && trig_r && A --> X
+		//trig_l && trig_r && B --> Y
 
         // =====================================================
 		// SEND FINAL INPUT REPORT
