@@ -91,8 +91,8 @@ const uint8_t procon_hid_descriptor[PROCON_HID_REPORT_MAP_LEN] = {
     0x05, 0x01,  //   Usage Page (Generic Desktop Ctrls)
     0x09, 0x30,  //   Usage (X)
     0x09, 0x31,  //   Usage (Y)
-    0x09, 0x33,  //   Usage (Rx)
-    0x09, 0x34,  //   Usage (Ry)
+    0x09, 0x32,  //   Usage (Rx) //prev 0x33
+    0x09, 0x35,  //   Usage (Ry) //prev 0x34
     0x16, 0x00, 0x00,              //   Logical Minimum (0)
     0x27, 0xFF, 0xFF, 0x00, 0x00,  //   Logical Maximum (65534)
     0x75, 0x10,                    //   Report Size (16)
@@ -163,6 +163,22 @@ void ns_set_imu_mode(uint8_t mode)
     _switch_imu_mode = mode;
 }
 
+static inline uint16_t clamp12(uint16_t v)
+{
+    return (v > 4095) ? 4095 : v;
+}
+
+// Pack 12-bit X/Y into 3 bytes (Nintendo format)
+static inline void pack_stick12(uint8_t *dst3, uint16_t x, uint16_t y)
+{
+    x = clamp12(x);
+    y = clamp12(y);
+
+    dst3[0] = (uint8_t)(x & 0xFF);
+    dst3[1] = (uint8_t)(((x >> 8) & 0x0F) | ((y & 0x0F) << 4));
+    dst3[2] = (uint8_t)((y >> 4) & 0xFF);
+}
+
 void ns_report_setinputreport_full(uint8_t *buffer)
 {
     // buffer[0] is set by ns_report_settimer()
@@ -176,26 +192,23 @@ void ns_report_setinputreport_full(uint8_t *buffer)
     buffer[4] = _switch_input_data.left_buttons;    // D-pad HAT ENCODES here
 
     // -------------------------------
-    // LEFT STICK (16-bit little endian)
-    // -------------------------------
-    uint16_t lx = _switch_input_data.ls_x;  // already 0–4095 or 0–65535 depending on your input system
-    uint16_t ly = _switch_input_data.ls_y;
+	// STICKS (Switch Pro format: 12-bit packed)
+	// -------------------------------
+	uint16_t lx = _switch_input_data.ls_x;
+	uint16_t ly = _switch_input_data.ls_y;
+	uint16_t rx = _switch_input_data.rs_x;
+	uint16_t ry = _switch_input_data.rs_y;
 
-    buffer[5] = lx & 0xFF;
-    buffer[6] = (lx >> 8) & 0xFF;
-    buffer[7] = ly & 0xFF;
-    buffer[8] = (ly >> 8) & 0xFF;
+	// Left stick at [5..7], Right stick at [8..10]
+	pack_stick12(&buffer[5], lx, ly);
+	pack_stick12(&buffer[8], rx, ry);
 
-    // -------------------------------
-    // RIGHT STICK (16-bit little endian)
-    // -------------------------------
-    uint16_t rx = _switch_input_data.rs_x;
-    uint16_t ry = _switch_input_data.rs_y;
-
-    buffer[9]  = rx & 0xFF;
-    buffer[10] = (rx >> 8) & 0xFF;
-    buffer[11] = ry & 0xFF;
-    buffer[12] = (ry >> 8) & 0xFF;
+	// -------------------------------
+	// Motion block (all zeros OK)
+	// -------------------------------
+	for (int i = 11; i < 48; i++) {
+		buffer[i] = 0x00;
+	}
 
     // -------------------------------
     // Motion block (all zeros OK)
