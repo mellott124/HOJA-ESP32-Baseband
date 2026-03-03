@@ -242,12 +242,13 @@ static void controller_task(void* arg)
 
         // =====================================================
         // SYNC combo — L + R + C-Down
+        //   < 5000 ms : no-op
+        //   >= 5000 ms: mode-specific re-pair / change host (destructive)
         // =====================================================
-        static bool combo_active = false;
+        static bool   combo_active = false;
         static int64_t combo_start_us = 0;
-        static bool combo_pair_started = false;
-        static bool combo_reset_fired = false;
-        static bool combo_reset_armed = true;
+        static bool   combo_reset_fired = false;
+        static bool   combo_reset_armed = true;
 
         bool combo_now = (!gpio_get_level(GPIO_BTN_L) &&
                           !gpio_get_level(GPIO_BTN_R) &&
@@ -257,25 +258,16 @@ static void controller_task(void* arg)
         if (combo_now && !combo_active) {
             combo_active = true;
             combo_start_us = now_us;
-            combo_pair_started = false;
             combo_reset_fired = false;
             ESP_LOGI(TAG, "SYNC combo started");
         }
+
         if (!combo_now) {
             combo_reset_armed = true;
         }
 
         if (combo_now && combo_active) {
             int64_t held_ms = (now_us - combo_start_us) / 1000;
-
-            // Switch Pro-style: enter pairing after >= 1000 ms (non-destructive)
-            if (!combo_pair_started && held_ms >= 1000) {
-                combo_pair_started = true;
-                ESP_LOGI(TAG, "SYNC hold >= 1000 ms → enter pairing");
-
-                esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-                led_set_state(LED_PAIRING);
-            }
 
             // Long hold: factory reset after >= 5000 ms (destructive)
             if (combo_reset_armed && !combo_reset_fired && held_ms >= 5000) {
@@ -330,8 +322,8 @@ static void controller_task(void* arg)
 
         if (!combo_now && combo_active) {
             combo_active = false;
-            int64_t held_ms = (now_us - combo_start_us) / 1000;
-            //ESP_LOGI(TAG, "SYNC combo released after %lld ms", held_ms);
+            // < 5000 ms: intentionally no-op (no LED, no pairing)
+            //ESP_LOGI(TAG, "SYNC combo released after %lld ms", (now_us - combo_start_us) / 1000);
         }
 
         // =====================================================
