@@ -382,8 +382,8 @@ static void controller_task(void* arg)
             case INPUT_MODE_SNES:
                 input.button_east   = !gpio_get_level(GPIO_BTN_C_R);    // C-Right → A
                 input.button_south  = !gpio_get_level(GPIO_BTN_C_D);    // C-Down  → B
-                input.button_west   = !gpio_get_level(GPIO_BTN_C_L);    // C-Up    → X
-                input.button_north  = !gpio_get_level(GPIO_BTN_C_U);    // C-Left  → Y
+                input.button_west   = !gpio_get_level(GPIO_BTN_C_L);    // C-Left  → Y
+                input.button_north  = !gpio_get_level(GPIO_BTN_C_U);    // C-Up    → X
                 input.dpad_up      = !gpio_get_level(GPIO_BTN_DPAD_U);  // D-pad   →Up
                 input.dpad_down    = !gpio_get_level(GPIO_BTN_DPAD_D);  // D-pad   →Down
                 input.dpad_left    = !gpio_get_level(GPIO_BTN_DPAD_L);  // D-pad   →Left
@@ -448,10 +448,10 @@ static void controller_task(void* arg)
                 input.dpad_down          = !gpio_get_level(GPIO_BTN_DPAD_D);   // Left D-pad Down
                 input.dpad_left          = !gpio_get_level(GPIO_BTN_DPAD_L);   // Left D-pad Left
                 input.dpad_right         = !gpio_get_level(GPIO_BTN_DPAD_R);   // Left D-pad Right
-                input.button_north       = !gpio_get_level(GPIO_BTN_C_L);
-                input.button_west        = !gpio_get_level(GPIO_BTN_C_U);
-                input.button_minus       = !gpio_get_level(GPIO_BTN_C_R);
-                input.trigger_zr         = !gpio_get_level(GPIO_BTN_C_D);
+                input.button_north       = !gpio_get_level(GPIO_BTN_C_L);	   // C-Left  → Y. D-pad in N64 mode.
+                input.button_west        = !gpio_get_level(GPIO_BTN_C_U);	   // C-Up    → X. D-pad in N64 mode.	
+                input.button_minus       = !gpio_get_level(GPIO_BTN_C_R);      // C-Right → A. D-pad in N64 mode.
+                input.trigger_zr         = !gpio_get_level(GPIO_BTN_C_D);      // C-Down  → B. D-pad in N64 mode.
                 input.trigger_l          = !gpio_get_level(GPIO_BTN_L);        // Trigger Left
                 input.trigger_r          = !gpio_get_level(GPIO_BTN_R);        // Trigger Right
                 input.button_plus        = !gpio_get_level(GPIO_BTN_START);    // Start → Plus
@@ -465,12 +465,9 @@ static void controller_task(void* arg)
 
         // =====================================================
         // SELECT / MODIFIER COMBOS (HOME / CAPTURE / ZL+ZR / X / R3)
-        //
-        // Added: 2-frame Select qualification for SWPRO Minus to reduce
-        // "Select blips" when chord-pressing combos.
-        //   - Combos can trigger immediately (no delay)
-        //   - Minus only asserts after Select has been held >= 2 frames
-        //     AND we are not in a Select+combo this frame.
+        // SWPRO Minus behavior: tap-on-release (stable)
+        //   - No tap time limit: any Select press+release with no modifiers => Minus
+        //   - Minus is pulsed for a few frames to ensure host observes it
         // =====================================================
         bool sel    = !gpio_get_level(GPIO_BTN_SELECT);
         bool trig_l = !gpio_get_level(GPIO_BTN_L);
@@ -510,56 +507,94 @@ static void controller_task(void* arg)
         }
 
         // -----------------------------------------------------
-        // 2-frame Select counting (SWPRO only)
+        // SWPRO: Select -> Minus as a tap on release
+        // - Any modifier/combo during the hold cancels Minus
+        // - Minus emitted as a short multi-frame pulse
         // -----------------------------------------------------
-        static uint8_t swpro_sel_frames = 0;
-
         if (mode_swpro) {
-            if (sel) {
-                if (swpro_sel_frames < 255) swpro_sel_frames++;
-            } else {
-                swpro_sel_frames = 0;
+            static bool    sel_prev = false;
+            static bool    sel_modified = false;
+            static uint8_t minus_pulse = 0;
+
+            bool any_modifier = trig_l || trig_r || c_u || c_d;
+
+            // If a pulse is active, assert Minus for a few frames
+            if (minus_pulse > 0) {
+                input.button_minus = true;
+                minus_pulse--;
             }
-        } else {
-            swpro_sel_frames = 0;
+
+            if (sel) {
+                // Select held: if it ever looks like a modifier/combo, cancel this press as Minus
+                if (any_modifier || consume_select) {
+                    sel_modified = true;
+                }
+            } else {
+                // Select released
+                if (sel_prev) {
+                    // If Select was a clean press (never modified), emit Minus pulse
+                    if (!sel_modified) {
+                        minus_pulse = 3; // 2 frames ≈ 16ms @ 8ms/frame (set 3 if you still see misses)
+                    }
+                }
+                sel_modified = false;
+            }
+
+            sel_prev = sel;
         }
 
-        // Minus only after Select is held >= 4 frames,
-		// not consumed by a combo,
-		// AND no combo modifiers are currently down
-		if (mode_swpro) {
-			bool any_modifier = trig_l || trig_r || c_u || c_d;
-			input.button_minus = (sel && (swpro_sel_frames >= 4) && !consume_select && !any_modifier);
-		}
+        // -----------------------------------------------------
+        // Clear ONLY what this combo block can generate,
+        // and ONLY in the modes where we generate it.
+        // -----------------------------------------------------
+        input.button_home    = false;
+        input.button_capture = false;
+
+        if (mode_swpro) {
+            input.trigger_zl         = false;
+            input.trigger_zr         = false;
+            input.button_stick_right = false;  // R3
+            input.button_north       = false;  // X
+        }
+
+        if (mode_n64) {
+            input.trigger_zl        = false;
+            input.button_stick_left = false;
+            // Do NOT clear trigger_zr here (N64 base mapping uses it)
+            // Do NOT clear button_north here (N64 base mapping uses it)
+        }
 
         // -----------------------------------------------------
-		// Clear ONLY what this combo block can generate,
-		// and ONLY in the modes where we generate it.
-		// -----------------------------------------------------
+        // SWPRO: grace window to prevent HOME/CAPTURE stealing Select+L+R
+        // -----------------------------------------------------
+        static uint8_t swpro_lr_pending = 0;     // 0 = none, 1 = L pending, 2 = R pending
+        static uint8_t swpro_lr_wait_frames = 0; // frames since pending started
+        const uint8_t SWPRO_LR_GRACE_FRAMES = 6; // ~48ms @ 8ms/frame
 
-		// Always safe: these are only used by combo logic here.
-		input.button_home    = false;
-		input.button_capture = false;
+        if (!mode_swpro || !sel) {
+            swpro_lr_pending = 0;
+            swpro_lr_wait_frames = 0;
+        } else {
+            if (trig_l && trig_r) {
+                // L+R combo takes precedence; clear pending state
+                swpro_lr_pending = 0;
+                swpro_lr_wait_frames = 0;
+            } else if (trig_l ^ trig_r) {
+                uint8_t side = trig_l ? 1 : 2;
 
-		if (mode_swpro) {
-			// SWPRO combo-generated fields
-			input.trigger_zl         = false;
-			input.trigger_zr         = false;
-			input.button_stick_right = false;  // R3
-			input.button_north       = false;  // X
-			// (Do NOT clear button_stick_left unless you also generate it in SWPRO)
-		}
+                if (swpro_lr_pending != side) {
+                    // Start (or restart) pending when side changes
+                    swpro_lr_pending = side;
+                    swpro_lr_wait_frames = 0;
+                }
 
-		if (mode_n64) {
-			// N64 combo-generated fields
-			input.trigger_zl        = false;
-			input.button_stick_left = false;
-
-			// IMPORTANT:
-			// Do NOT clear trigger_zr here (N64 base mapping uses it)
-			// Do NOT clear button_north here (N64 base mapping uses it)
-			// Do NOT clear button_stick_right here unless you generate it in N64
-		}
+                if (swpro_lr_wait_frames < 255) swpro_lr_wait_frames++;
+            } else {
+                // No triggers held
+                swpro_lr_pending = 0;
+                swpro_lr_wait_frames = 0;
+            }
+        }
 
         // --- SWPRO combos (immediate) ---
         if (mode_swpro && sel && trig_l && trig_r) {
@@ -574,10 +609,17 @@ static void controller_task(void* arg)
             input.button_stick_right = true;    // R3
             input.rx = 2048; input.ry = 2048;
         }
-        else if (mode_swpro && sel && trig_l && !trig_r) {
+        // --- SWPRO: guarded HOME/CAPTURE (after grace window) ---
+        else if (mode_swpro && sel &&
+                 swpro_lr_pending == 1 &&
+                 swpro_lr_wait_frames >= SWPRO_LR_GRACE_FRAMES &&
+                 trig_l && !trig_r) {
             input.button_home = true;
         }
-        else if (mode_swpro && sel && trig_r && !trig_l) {
+        else if (mode_swpro && sel &&
+                 swpro_lr_pending == 2 &&
+                 swpro_lr_wait_frames >= SWPRO_LR_GRACE_FRAMES &&
+                 trig_r && !trig_l) {
             input.button_capture = true;
         }
         // --- N64 combos ---
