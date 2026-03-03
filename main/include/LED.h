@@ -28,9 +28,10 @@ typedef enum {
     LED_IDLE,            // Breathing blue
     LED_PAIRING,         // Fast blue blink
     LED_CONNECTED,       // Solid green
+	LED_CONNECT_FAILED,  // Flashing Amber
     LED_ERROR,           // Flashing red
     LED_PLAYER_FLASH,    // Blink N times to indicate player number
-	LED_DINPUT,          // Solid purple (new for XInput mode)
+	LED_DINPUT,          // Solid purple 
     LED_DISCONNECTED     // Off
 } led_state_t;
 

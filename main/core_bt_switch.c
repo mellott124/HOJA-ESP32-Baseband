@@ -376,7 +376,7 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
             if (param->start.status == ESP_OK)
             {
                 ESP_LOGI(TAG, "START OK");
-                led_set_state(LED_PAIRING);  // Amber while advertising/reconnecting
+                led_set_state(LED_PAIRING);  // Blue while advertising/reconnecting
                 if (_switch_paired) {
 					// Adaptive reconnect timing
 					int64_t uptime_ms = esp_timer_get_time() / 1000;
@@ -387,7 +387,7 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
 							 reconnect_delay);
 
 					// Visual feedback while waiting
-					led_set_state(LED_PAIRING);  // amber blink to show it's reconnecting
+					led_set_state(LED_PAIRING);  // Blue blink to show it's reconnecting
 
 					vTaskDelay(pdMS_TO_TICKS(reconnect_delay));
 
@@ -420,7 +420,7 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
             else
             {
                 ESP_LOGE(TAG, "CONNECT failed!");
-                led_set_state(LED_ERROR);     // Red = connection failure
+                led_set_state(LED_CONNECT_FAILED);     // Red = connection failure
             }
             break;
         }
@@ -437,7 +437,7 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
             {
                 ESP_LOGI(TAG, "DISCONNECT OK");
                 // Return to advertising mode for pairing
-                led_set_state(LED_PAIRING);   // Amber while re-advertising
+                led_set_state(LED_PAIRING);   // blue while re-advertising
                 esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
             }
             else

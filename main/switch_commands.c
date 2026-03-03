@@ -55,8 +55,10 @@ void ns_report_setbattconn(uint8_t *buffer)
 // --------------------------------------------------------------------------
 void ns_report_sub_setdevinfo(uint8_t *buffer)
 {
-  _switch_input_buffer[14] = 0x04; // Firmware major (4.x)
-  _switch_input_buffer[15] = 0x33; // Firmware minor (x.21)
+  //_switch_input_buffer[14] = 0x04; // Firmware major (4.x)
+  //_switch_input_buffer[15] = 0x33; // Firmware minor (x.21)
+  buffer[14] = 0x04;
+  buffer[15] = 0x33;
 
   // Controller identity bytes:
   // Procon   - 0x03, 0x02

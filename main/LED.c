@@ -140,6 +140,11 @@ void led_task(void *arg)
                 led_set_rgb(0, LED_MAX_DUTY, 0);
                 vTaskDelay(pdMS_TO_TICKS(500));
                 break;
+				
+			case LED_CONNECT_FAILED:
+				led_set_rgb(LED_MAX_DUTY, 60, 0);  // amber
+				vTaskDelay(pdMS_TO_TICKS(500));
+				break;
 
             case LED_ERROR: // red flash
                 on = !on;
