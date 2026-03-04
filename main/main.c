@@ -741,7 +741,7 @@ void app_main(void)
 
     // Optional LED feedback per mode
     switch (get_current_mode()) {
-        case INPUT_MODE_SWPRO:  led_set_state(LED_PAIRING);   break;   // Amber
+        case INPUT_MODE_SWPRO:  led_set_state(LED_PAIRING);   break;   // Blue
         case INPUT_MODE_SNES:   led_set_state(LED_CONNECTED); break;   // Green
         case INPUT_MODE_NES:    led_set_state(LED_CONNECTED); break;   // Green
         case INPUT_MODE_DINPUT: led_set_state(LED_DINPUT);    break;   // Purple

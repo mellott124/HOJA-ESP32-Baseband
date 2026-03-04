@@ -142,7 +142,7 @@ void led_task(void *arg)
                 break;
 				
 			case LED_CONNECT_FAILED:
-				led_set_rgb(LED_MAX_DUTY, 60, 0);  // amber
+				led_set_rgb(LED_MAX_DUTY, LED_MAX_DUTY, 0);  // Yellow
 				vTaskDelay(pdMS_TO_TICKS(500));
 				break;
 

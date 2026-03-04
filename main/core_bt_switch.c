@@ -380,7 +380,7 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
                 if (_switch_paired) {
 					// Adaptive reconnect timing
 					int64_t uptime_ms = esp_timer_get_time() / 1000;
-					int reconnect_delay = (uptime_ms < 3000) ? 700 : 200;  // longer on cold boot, short after reset
+					int reconnect_delay = (uptime_ms < 3000) ? 3000 : 400;  // longer on cold boot, short after reset
 
 					ESP_LOGI(TAG,
 							 "Known host found — waiting %d ms before reconnect...",
