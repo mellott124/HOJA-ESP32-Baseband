@@ -436,14 +436,36 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
             if (param->disconnect.status == ESP_OK)
             {
                 ESP_LOGI(TAG, "DISCONNECT OK");
-                // Return to advertising mode for pairing
-                led_set_state(LED_PAIRING);   // blue while re-advertising
-                esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+
+                const uint8_t zero[6] = {0};
+
+                // If we have a known host, attempt a single reconnect
+                if (_switch_paired &&
+                    memcmp(global_loaded_settings.paired_host_switch_mac, zero, 6) != 0)
+                {
+                    led_set_state(LED_CONNECT_FAILED);  // Yellow / reconnecting
+
+                    const int reconnect_delay = 400;    // always short delay after disconnect
+
+                    ESP_LOGI(TAG,
+                             "Known host — DISCONNECT: waiting %d ms then reconnect...",
+                             reconnect_delay);
+
+                    vTaskDelay(pdMS_TO_TICKS(reconnect_delay));
+
+                    util_bluetooth_connect(global_loaded_settings.paired_host_switch_mac);
+                }
+                else
+                {
+                    // No paired host — enter pairing mode
+                    led_set_state(LED_PAIRING);
+                    esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+                }
             }
             else
             {
                 ESP_LOGE(TAG, "DISCONNECT failed!");
-                led_set_state(LED_ERROR);     // Red on disconnect error
+                led_set_state(LED_ERROR);
             }
             break;
         }

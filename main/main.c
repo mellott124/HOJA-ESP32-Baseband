@@ -464,7 +464,8 @@ static void controller_task(void* arg)
         bool sel    = !gpio_get_level(GPIO_BTN_SELECT);
         bool trig_l = !gpio_get_level(GPIO_BTN_L);
         bool trig_r = !gpio_get_level(GPIO_BTN_R);
-        bool c_u    = !gpio_get_level(GPIO_BTN_C_U);  // do NOT change wiring here
+        bool c_u    = !gpio_get_level(GPIO_BTN_C_U);  
+		bool c_l    = !gpio_get_level(GPIO_BTN_C_L);  
         bool c_d    = !gpio_get_level(GPIO_BTN_C_D);
 
         bool mode_swpro = (get_current_mode() == INPUT_MODE_SWPRO);
@@ -480,6 +481,9 @@ static void controller_task(void* arg)
             consume_select = true;
         }
         else if (mode_swpro && sel && c_u) {
+            consume_select = true;
+        }
+		else if (mode_swpro && sel && c_l) {
             consume_select = true;
         }
         else if (mode_swpro && sel && c_d) {
@@ -508,7 +512,7 @@ static void controller_task(void* arg)
             static bool    sel_modified = false;
             static uint8_t minus_pulse = 0;
 
-            bool any_modifier = trig_l || trig_r || c_u || c_d;
+            bool any_modifier = trig_l || trig_r || c_u || c_l || c_d;
 
             // If a pulse is active, assert Minus for a few frames
             if (minus_pulse > 0) {
@@ -547,6 +551,7 @@ static void controller_task(void* arg)
             input.trigger_zr         = false;
             input.button_stick_right = false;  // R3
             input.button_north       = false;  // X
+			input.button_west        = false;  // Y
         }
 
         if (mode_n64) {
@@ -595,6 +600,10 @@ static void controller_task(void* arg)
         }
         else if (mode_swpro && sel && c_u) {
             input.button_north = true;          // X
+            input.rx = 2048; input.ry = 2048;
+        }
+		else if (mode_swpro && sel && c_l) {
+            input.button_west = true;           // Y
             input.rx = 2048; input.ry = 2048;
         }
         else if (mode_swpro && sel && c_d) {

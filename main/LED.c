@@ -17,7 +17,9 @@
 #define LED_G_PIN  GPIO_NUM_27
 #define LED_B_PIN  GPIO_NUM_25
 
-#define LED_MAX_DUTY     225
+#define LED_RED_MAX_DUTY     	254
+#define LED_GREEN_MAX_DUTY     	200
+#define LED_BLUE_MAX_DUTY     	254
 #define LED_FREQ_HZ      5000
 #define LED_RES_BITS     LEDC_TIMER_8_BIT
 #define LED_OFF_DUTY     0  // after inversion, 0 = fully OFF, 255 = fully ON
@@ -74,9 +76,9 @@ static void led_hw_init(void)
 // -------------------------------------------------------------
 static inline void led_set_rgb(uint8_t r, uint8_t g, uint8_t b)
 {
-    if (r > LED_MAX_DUTY) r = LED_MAX_DUTY;
-    if (g > LED_MAX_DUTY) g = LED_MAX_DUTY;
-    if (b > LED_MAX_DUTY) b = LED_MAX_DUTY;
+    if (r > LED_RED_MAX_DUTY) r = LED_RED_MAX_DUTY;
+    if (g > LED_GREEN_MAX_DUTY) g = LED_GREEN_MAX_DUTY;
+    if (b > LED_BLUE_MAX_DUTY) b = LED_BLUE_MAX_DUTY;
 
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, r);
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, g);
@@ -93,15 +95,15 @@ static inline void led_set_rgb(uint8_t r, uint8_t g, uint8_t b)
 void led_boot_sweep(void)
 {
     //ESP_LOGI(TAG, "LED boot sweep start");
-    for (int i = 0; i <= LED_MAX_DUTY; i += 4) {
+    for (int i = 0; i <= LED_RED_MAX_DUTY; i += 4) {
         led_set_rgb(i, 0, 0);
         vTaskDelay(pdMS_TO_TICKS(3));
     }
-    for (int i = 0; i <= LED_MAX_DUTY; i += 4) {
+    for (int i = 0; i <= LED_GREEN_MAX_DUTY; i += 4) {
         led_set_rgb(0, i, 0);
         vTaskDelay(pdMS_TO_TICKS(3));
     }
-    for (int i = 0; i <= LED_MAX_DUTY; i += 4) {
+    for (int i = 0; i <= LED_BLUE_MAX_DUTY; i += 4) {
         led_set_rgb(0, 0, i);
         vTaskDelay(pdMS_TO_TICKS(3));
     }
@@ -124,7 +126,7 @@ void led_task(void *arg)
         switch (current_led_state) {
             case LED_IDLE: // soft blue breathing
                 fade += dir * 4;
-                if (fade >= LED_MAX_DUTY) { fade = LED_MAX_DUTY; dir = -1; }
+                if (fade >= LED_BLUE_MAX_DUTY) { fade = LED_BLUE_MAX_DUTY; dir = -1; }
                 if (fade <= 0)             { fade = 0; dir = 1; }
                 led_set_rgb(0, 0, fade);
                 vTaskDelay(pdMS_TO_TICKS(16));
@@ -132,23 +134,23 @@ void led_task(void *arg)
 
             case LED_PAIRING: // fast blue blink
                 on = !on;
-                led_set_rgb(0, 0, on ? LED_MAX_DUTY : 0);
+                led_set_rgb(0, 0, on ? LED_BLUE_MAX_DUTY : 0);
                 vTaskDelay(pdMS_TO_TICKS(250));
                 break;
 
             case LED_CONNECTED: // solid green
-                led_set_rgb(0, LED_MAX_DUTY, 0);
+                led_set_rgb(0, LED_GREEN_MAX_DUTY, 0);
                 vTaskDelay(pdMS_TO_TICKS(500));
                 break;
 				
-			case LED_CONNECT_FAILED:
-				led_set_rgb(LED_MAX_DUTY, LED_MAX_DUTY, 0);  // Yellow
+			case LED_CONNECT_FAILED: //Yellow solid
+				led_set_rgb(LED_RED_MAX_DUTY, 80, 0);  // Yellow/Amber
 				vTaskDelay(pdMS_TO_TICKS(500));
 				break;
 
             case LED_ERROR: // red flash
                 on = !on;
-                led_set_rgb(on ? LED_MAX_DUTY : 0, 0, 0);
+                led_set_rgb(on ? LED_RED_MAX_DUTY : 0, 0, 0);
                 vTaskDelay(pdMS_TO_TICKS(200));
                 break;
 
@@ -156,7 +158,7 @@ void led_task(void *arg)
 			{
 				// Continuous blink of player number forever
 				for (uint8_t i = 0; i < player_number; i++) {
-					led_set_rgb(0, LED_MAX_DUTY, 0);           // LED on (green)
+					led_set_rgb(0, LED_GREEN_MAX_DUTY, 0);           // LED on (green)
 					vTaskDelay(pdMS_TO_TICKS(150));            // on duration
 					led_set_rgb(0, 0, 0);                      // off
 					vTaskDelay(pdMS_TO_TICKS(150));            // off duration
@@ -171,7 +173,7 @@ void led_task(void *arg)
 			break;
 
 			case LED_DINPUT: // solid purple (red + blue)
-				led_set_rgb(LED_MAX_DUTY, 0, LED_MAX_DUTY);
+				led_set_rgb(LED_RED_MAX_DUTY, 0, LED_BLUE_MAX_DUTY);
 				vTaskDelay(pdMS_TO_TICKS(500));
 				break;
 
