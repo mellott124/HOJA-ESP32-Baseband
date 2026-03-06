@@ -14,16 +14,17 @@ static i2cinput_input_s _last_input = {0};
 // -------------------------------
 static volatile bool _hid_connected = false;
 static volatile bool _dinput_paired = false;
+static volatile uint8_t _dinput_hat = 0x08;
 
 TaskHandle_t _dinput_bt_task_handle = NULL;
 static interval_s _dinput_interval = {0};
 
 // Internal working report
 static dinput_report_s _dinput_report = {
-    .x = 128,
-    .y = 128,
-    .z = 128,
-    .rz = 128,
+    .x = 0,
+    .y = 0,
+    .z = 0,
+    .rz = 0,
     .buttons = 0
 };
 
@@ -31,60 +32,62 @@ static dinput_report_s _dinput_report = {
 // DInput HID Descriptor
 // -------------------------------
 // Report ID = 1
-// 4 axes + 16 buttons
-// -------------------------------
-// HID Report Descriptor (DInput)
+// 16 buttons + hat + X/Y/Rx/Ry
 // -------------------------------
 static const uint8_t dinput_hid_descriptor[] = {
-
     0x05, 0x01,        // Usage Page (Generic Desktop)
-    0x09, 0x05,        // Usage (Gamepad)
+    0x09, 0x05,        // Usage (Game Pad)
     0xA1, 0x01,        // Collection (Application)
 
-        // Report ID
-        0x85, 0x01,    // Report ID = 1
+    0x85, 0x01,        //   Report ID (1)
 
-        // -------------------------------
-        // 4 Analog Axes (X,Y,Z,Rz)
-        // -------------------------------
-        0x05, 0x01,    // Usage Page (Generic Desktop)
+    // ------------------------------------------------
+    // 16 buttons
+    // ------------------------------------------------
+    0x05, 0x09,        //   Usage Page (Button)
+    0x19, 0x01,        //   Usage Minimum (Button 1)
+    0x29, 0x10,        //   Usage Maximum (Button 16)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x25, 0x01,        //   Logical Maximum (1)
+    0x75, 0x01,        //   Report Size (1)
+    0x95, 0x10,        //   Report Count (16)
+    0x81, 0x02,        //   Input (Data,Var,Abs)
 
-        0x09, 0x30,    // Usage (X)
-        0x09, 0x31,    // Usage (Y)
-        0x09, 0x32,    // Usage (Z)
-        0x09, 0x35,    // Usage (Rz)
+    // ------------------------------------------------
+    // Hat switch for LEFT VB D-pad
+    // ------------------------------------------------
+    0x05, 0x01,        //   Usage Page (Generic Desktop)
+    0x09, 0x39,        //   Usage (Hat switch)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x25, 0x07,        //   Logical Maximum (7)
+    0x35, 0x00,        //   Physical Minimum (0)
+    0x46, 0x3B, 0x01,  //   Physical Maximum (315)
+    0x65, 0x14,        //   Unit (English Rotation, Angular Position)
+    0x75, 0x04,        //   Report Size (4)
+    0x95, 0x01,        //   Report Count (1)
+    0x81, 0x42,        //   Input (Data,Var,Abs,Null State)
 
-        0x15, 0x00,    // Logical Min = 0
-        0x26, 0xFF, 0x00, // Logical Max = 255
-        0x75, 0x08,    // Report Size = 8 bits
-        0x95, 0x04,    // Report Count = 4
-        0x81, 0x02,    // Input (Data,Var,Abs)
+    // Padding nibble
+    0x75, 0x04,        //   Report Size (4)
+    0x95, 0x01,        //   Report Count (1)
+    0x81, 0x03,        //   Input (Const,Var,Abs)
 
-        // -------------------------------
-        // 16 Buttons
-        // -------------------------------
-        0x05, 0x09,    // Usage Page (Buttons)
-        0x19, 0x01,    // Usage Minimum = Button 1
-        0x29, 0x10,    // Usage Maximum = Button 16
+    // ------------------------------------------------
+    // 4 axes: X, Y, Rx, Ry
+    // X/Y centered, RIGHT VB D-pad on Rx/Ry
+    // ------------------------------------------------
+    0x05, 0x01,        //   Usage Page (Generic Desktop)
+    0x09, 0x30,        //   Usage (X)
+    0x09, 0x31,        //   Usage (Y)
+    0x09, 0x33,        //   Usage (Rx)
+    0x09, 0x34,        //   Usage (Ry)
+    0x15, 0x81,        //   Logical Minimum (-127)
+    0x25, 0x7F,        //   Logical Maximum (127)
+    0x75, 0x08,        //   Report Size (8)
+    0x95, 0x04,        //   Report Count (4)
+    0x81, 0x02,        //   Input (Data,Var,Abs)
 
-        0x15, 0x00,    // Logical Min = 0
-        0x25, 0x01,    // Logical Max = 1
-
-        0x75, 0x01,    // Report Size = 1 bit
-        0x95, 0x10,    // Report Count = 16 buttons
-
-        0x81, 0x02,    // Input (Data,Var,Abs)
-		
-    // ------ NEW HAPTIC OUTPUT REPORT ------
-        0x85, 0x02,     // Report ID 2
-        0x09, 0x20,     // Usage (FF Placeholder)
-        0x15, 0x00,
-        0x26, 0xFF, 0x00,
-        0x75, 0x08,
-        0x95, 0x02,     // strong + weak rumble
-        0x91, 0x02,     // Output (Data,Var,Abs)
-    // ---------------------------------------
-    0xC0              // End Collection
+    0xC0               // End Collection
 };
 
 esp_hid_raw_report_map_t dinput_report_maps[1] = {
@@ -108,7 +111,7 @@ esp_hid_device_config_t dinput_hidd_config = {
     .vendor_id = 0x1209,
     .product_id = 0x0001,
     .version = 0x0001,
-    .device_name = "RetroOnyx Controller",
+    .device_name = "RetroOnyx Gamepad",
     .manufacturer_name = "RetroOnyx",
     .serial_number = "000001",
     .report_maps = dinput_report_maps,
@@ -165,9 +168,6 @@ void dinput_bt_gap_cb(esp_bt_gap_cb_event_t event,
             }
             break;
 
-        // ---- SAFETY FIX ----
-        // Absorb ALL other events without touching param
-        // ---------------------
         default:
             ESP_LOGD(TAG, "Unhandled GAP event: %d", event);
             break;
@@ -195,7 +195,6 @@ void dinput_bt_hidd_cb(void *handler_args,
                 led_set_state(LED_PAIRING);
 
                 if (_dinput_paired) {
-                    // --- Autoconnect to last paired Windows host ---
                     ESP_LOGI(TAG, "Autoconnect: trying stored host...");
                     int64_t uptime = esp_timer_get_time() / 1000;
                     int delay = (uptime < 3000) ? 700 : 200;
@@ -205,7 +204,6 @@ void dinput_bt_hidd_cb(void *handler_args,
                         global_loaded_settings.paired_host_dinput_mac);
 
                 } else {
-                    // --- First-time pairing mode ---
                     ESP_LOGI(TAG, "No pair record — entering discoverable mode");
                     esp_bt_gap_set_scan_mode(
                         ESP_BT_CONNECTABLE,
@@ -222,7 +220,7 @@ void dinput_bt_hidd_cb(void *handler_args,
             if (param->connect.status == ESP_OK) {
                 _hid_connected = true;
                 ESP_LOGI(TAG, "CONNECT OK");
-                led_set_player_number(1); //Blinking Green Connected State to mimic Switch
+                led_set_player_number(1);
             } else {
                 ESP_LOGE(TAG, "connect failed");
                 led_set_state(LED_ERROR);
@@ -245,29 +243,10 @@ void dinput_bt_hidd_cb(void *handler_args,
             _hid_connected = false;
             led_set_state(LED_IDLE);
             break;
-			
-		case ESP_HIDD_OUTPUT_EVENT: {
-			const uint8_t *data = param->output.data;
-			int len = param->output.length;
 
-			ESP_LOGI(TAG, "HID OUT (ReportID=%d, len=%d)", data[0], len);
-
-			// Report ID must be 2 for rumble
-			if (len >= 3 && data[0] == 0x02) {
-				uint8_t strong = data[1];
-				uint8_t weak   = data[2];
-
-				// Pick max for single-motor DRV2605
-				uint8_t level = strong > weak ? strong : weak;
-
-				ESP_LOGI(TAG, "Rumble strong=%u weak=%u final=%u",
-						 strong, weak, level);
-
-				drv2605_set_rtp(level);
-			}
-
-				break;
-		}
+        case ESP_HIDD_OUTPUT_EVENT:
+            ESP_LOGI(TAG, "Ignoring HID output event");
+            break;
 
         default:
             break;
@@ -299,51 +278,47 @@ int core_bt_dinput_start(void)
     const uint8_t zero[6] = {0};
 
     // ------------------------------------------------------
-	// Validate or regenerate DInput device MAC
-	// ------------------------------------------------------
-	bool mac_valid = true;
+    // Validate or regenerate DInput device MAC
+    // ------------------------------------------------------
+    bool mac_valid = true;
 
-	// Reject all-zero MAC
-	if (memcmp(global_loaded_settings.device_mac_dinput, zero, 6) == 0) {
-		mac_valid = false;
-	}
+    if (memcmp(global_loaded_settings.device_mac_dinput, zero, 6) == 0) {
+        mac_valid = false;
+    }
 
-	// Reject EFUSE collisions (must not match base MAC)
-	if (memcmp(global_loaded_settings.device_mac_dinput, base_mac, 6) == 0) {
-		mac_valid = false;
-	}
+    if (memcmp(global_loaded_settings.device_mac_dinput, base_mac, 6) == 0) {
+        mac_valid = false;
+    }
 
-	// Reject illegal Espressif addresses (must be base_mac - 2)
-	uint8_t expected_mac[6];
-	memcpy(expected_mac, base_mac, 6);
-	expected_mac[5] -= 2;
+    uint8_t expected_mac[6];
+    memcpy(expected_mac, base_mac, 6);
+    expected_mac[5] -= 2;
 
-	if (memcmp(global_loaded_settings.device_mac_dinput, expected_mac, 6) != 0) {
-		mac_valid = false;
-	}
+    if (memcmp(global_loaded_settings.device_mac_dinput, expected_mac, 6) != 0) {
+        mac_valid = false;
+    }
 
-	// If invalid → regenerate and save
-	if (!mac_valid) {
-		ESP_LOGW(TAG, "Invalid DInput MAC detected — regenerating.");
+    if (!mac_valid) {
+        ESP_LOGW(TAG, "Invalid DInput MAC detected — regenerating.");
 
-		memcpy(tmpmac, base_mac, 6);
-		tmpmac[5] -= 2;  // required for BT Classic
+        memcpy(tmpmac, base_mac, 6);
+        tmpmac[5] -= 2;
 
-		memcpy(global_loaded_settings.device_mac_dinput, tmpmac, 6);
-		app_settings_save();
+        memcpy(global_loaded_settings.device_mac_dinput, tmpmac, 6);
+        app_settings_save();
 
-		ESP_LOGI(TAG,
-			"Saved regenerated DInput MAC: %02X:%02X:%02X:%02X:%02X:%02X",
-			tmpmac[0], tmpmac[1], tmpmac[2],
-			tmpmac[3], tmpmac[4], tmpmac[5]);
-	}
-	else {
-		memcpy(tmpmac, global_loaded_settings.device_mac_dinput, 6);
-		ESP_LOGI(TAG,
-			"Using stored DInput MAC: %02X:%02X:%02X:%02X:%02X:%02X",
-			tmpmac[0], tmpmac[1], tmpmac[2],
-			tmpmac[3], tmpmac[4], tmpmac[5]);
-	}
+        ESP_LOGI(TAG,
+            "Saved regenerated DInput MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+            tmpmac[0], tmpmac[1], tmpmac[2],
+            tmpmac[3], tmpmac[4], tmpmac[5]);
+    }
+    else {
+        memcpy(tmpmac, global_loaded_settings.device_mac_dinput, 6);
+        ESP_LOGI(TAG,
+            "Using stored DInput MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+            tmpmac[0], tmpmac[1], tmpmac[2],
+            tmpmac[3], tmpmac[4], tmpmac[5]);
+    }
 
     ESP_LOGI(TAG,
         "Final DInput BT MAC: %02X:%02X:%02X:%02X:%02X:%02X",
@@ -355,12 +330,6 @@ int core_bt_dinput_start(void)
     // ------------------------------------------------------
     if (memcmp(global_loaded_settings.paired_host_dinput_mac, zero, 6) != 0) {
 
-        // ------------------------------------------------------
-        // SAFETY FIX:
-        // If paired-host MAC equals OUR OWN MAC → INVALID.
-        // This happens after long-sync resets and causes
-        // endless autoconnect failures.
-        // ------------------------------------------------------
         if (memcmp(global_loaded_settings.paired_host_dinput_mac,
                    tmpmac, 6) == 0)
         {
@@ -411,7 +380,6 @@ int core_bt_dinput_start(void)
     return err;
 }
 
-
 void core_bt_dinput_stop(void)
 {
     util_bluetooth_deinit();
@@ -428,7 +396,6 @@ void _dinput_bt_task(void *parameters)
 
     for (;;)
     {
-        // Defer delete if notified
         if (ulTaskNotifyTake(pdTRUE, 0)) {
             ESP_LOGI("dinput_task", "Delete requested");
             vTaskDelete(NULL);
@@ -441,12 +408,14 @@ void _dinput_bt_task(void *parameters)
                              &_dinput_interval))
             {
                 uint8_t buf[DINPUT_REPORT_SIZE];
-                buf[0] = _dinput_report.x;
-                buf[1] = _dinput_report.y;
-                buf[2] = _dinput_report.z;
-                buf[3] = _dinput_report.rz;
-                buf[4] = (_dinput_report.buttons & 0xFF);
-                buf[5] = (_dinput_report.buttons >> 8);
+
+                buf[0] = (_dinput_report.buttons & 0xFF);
+                buf[1] = (_dinput_report.buttons >> 8);
+                buf[2] = (_dinput_hat & 0x0F);
+                buf[3] = _dinput_report.x;
+                buf[4] = _dinput_report.y;
+                buf[5] = _dinput_report.z;   // Rx
+                buf[6] = _dinput_report.rz;  // Ry
 
                 esp_bt_hid_device_send_report(
                     ESP_HIDD_REPORT_TYPE_INTRDATA,
@@ -502,87 +471,103 @@ void _dinput_bt_task(void *parameters)
 //   Only map based on your validated debug table.
 //
 // ============================================================================
-// +-----------------------+----------------------+---------------------------+
-// | VB PHYSICAL BUTTON    | HOJA FIELD FIRED     | DINPUT OUTPUT             |
-// +-----------------------+----------------------+---------------------------+
-// | A                     | button_south         | Button 1                  |
-// | B                     | button_east          | Button 2                  |
-// | Select                | button_minus         | Button 15                 |
-// | Start                 | button_plus          | Button 16                 |
-// | L                     | trigger_l            | Button 9                  |
-// | R                     | trigger_r            | Button 10                 |
-// +-----------------------+----------------------+---------------------------+
-// | LEFT DPAD UP          | dpad_up              | Button 5                  |
-// | LEFT DPAD DOWN        | dpad_down            | Button 6                  |
-// | LEFT DPAD LEFT        | dpad_left            | Button 7                  |
-// | LEFT DPAD RIGHT       | dpad_right           | Button 8                  |
-// +-----------------------+----------------------+---------------------------+
-// | RIGHT DPAD UP         | button_north         | Z Rotation = 0            |
-// | RIGHT DPAD DOWN       | ry == 0              | Z Rotation = 255          |
-// | RIGHT DPAD LEFT       | button_west          | Z = 0                     |
-// | RIGHT DPAD RIGHT      | rx == 65535          | Z = 255                   |
-// +-----------------------+----------------------+---------------------------+
-// | NO RIGHT DPAD PRESS   | rx≈32767 ry≈32767    | Z = 128, ZRot = 128       |
-// +-----------------------+----------------------+---------------------------+
 void dinput_bt_sendinput(i2cinput_input_s *input)
 {
     if (!input) return;
 
     debug_print_input_changes(input);
 
-    // -------- LEFT DPAD → BUTTONS ONLY --------
+    // VB semantic buttons (derived from HOJA fields for DInput mode)
+    bool vb_a      = !!input->button_east;
+    bool vb_b      = !!input->button_south;
+    bool vb_l      = !!input->trigger_l;
+    bool vb_r      = !!input->trigger_r;
+    bool vb_start  = !!input->button_plus;
+    bool vb_select = !!input->button_minus;
+
+    // VB left d-pad
+    bool vb_left_up    = !!input->dpad_up;
+    bool vb_left_down  = !!input->dpad_down;
+    bool vb_left_left  = !!input->dpad_left;
+    bool vb_left_right = !!input->dpad_right;
+
+    // VB right d-pad
+    bool vb_right_up    = !!input->button_north;
+    bool vb_right_left  = !!input->button_west;
+    bool vb_right_right = (input->rx == 65535);
+    bool vb_right_down  = (input->ry == 0);
+
+    // BlueRetro VB default mapping discovery status
+	// bit 0  = A
+	// bit 3  = B
+	// bit 6  = L
+	// bit 7  = R
+	// bit 10 = Select
+	// bit 11 = Start
+	//
+	// duplicates observed:
+	// bit 6, 8 	= L
+	// bit 7, 9  	= R 
+	// bit 11, 12 	= Start 
+	// bit 7, 15 	= Select
+    enum {
+		BR_SLOT_SELECT = 10, //confirmed!
+        BR_SLOT_START  = 11, //confirmed!  //Bit 12 triggers same behavior
+        BR_SLOT_A      = 0, //confirmed!
+		BR_SLOT_B      = 3, //confirmed!
+        BR_SLOT_L      = 6, //confirmed!
+        BR_SLOT_R      = 7, //confirmed! //bit 9 triggers same behavior
+    };
+
     uint16_t b = 0;
-
-    b |= (input->button_south) << 0;    // A
-    b |= (input->button_east)  << 1;    // B
-    //b |= (input->button_west)  << 2;    // Y
-    //b |= (input->button_north) << 3;    // X
-
-    b |= (input->dpad_up)      << 4;
-    b |= (input->dpad_down)    << 5;
-    b |= (input->dpad_left)    << 6;
-    b |= (input->dpad_right)   << 7;
-
-    b |= (input->trigger_l)    << 8;
-    b |= (input->trigger_r)    << 9;
-    b |= (input->trigger_zl)   << 10;
-    b |= (input->trigger_zr)   << 11;
-
-    b |= (input->button_stick_left)  << 12;
-    b |= (input->button_stick_right) << 13;
-
-    b |= (input->button_minus) << 14;  // SELECT
-    b |= (input->button_plus)  << 15;  // START
+	b |= vb_select << BR_SLOT_SELECT;
+	b |= vb_start  << BR_SLOT_START;
+    b |= vb_a      << BR_SLOT_A;
+	b |= vb_b      << BR_SLOT_B;
+    b |= vb_l      << BR_SLOT_L;
+    b |= vb_r      << BR_SLOT_R;
 
     _dinput_report.buttons = b;
 
-	// -------- RIGHT DPAD → DINPUT AXES (Z + ZROT) --------
-	uint8_t z  = 128;   // X-axis of right stick (left/right)
-	uint8_t rz = 128;   // Y-axis of right stick (up/down)
+    // Left VB D-pad -> Hat
+    uint8_t hat = 0x08; // neutral
 
-	// --- RIGHT DPAD UP ---
-	if (input->button_north) {        
-		rz = 0;          // Zrot MIN
-	}
-	// --- RIGHT DPAD DOWN ---
-	else if (input->ry == 0) { 
-		rz = 255;        // Zrot MAX
-	}
+    if (vb_left_up && vb_left_right)          hat = 1;
+    else if (vb_left_right && vb_left_down)   hat = 3;
+    else if (vb_left_down && vb_left_left)    hat = 5;
+    else if (vb_left_left && vb_left_up)      hat = 7;
+    else if (vb_left_up)                      hat = 0;
+    else if (vb_left_right)                   hat = 2;
+    else if (vb_left_down)                    hat = 4;
+    else if (vb_left_left)                    hat = 6;
 
-	// --- RIGHT DPAD LEFT ---
-	if (input->button_west) {    
-		z = 0;           // Z MIN
-	}
-	// --- RIGHT DPAD RIGHT ---
-	else if (input->rx == 65535) { 
-		z = 255;         // Z MAX
-	}
+    _dinput_hat = hat;
 
-	_dinput_report.z  = z;
-	_dinput_report.rz = rz;
+    // Keep X/Y centered
+    _dinput_report.x = 0;
+    _dinput_report.y = 0;
 
+    // Right VB D-pad -> Rx/Ry
+    int8_t rx = 0;
+    int8_t ry = 0;
+
+    if (vb_right_left) {
+        rx = -127;
+    }
+    else if (vb_right_right) {
+        rx = 127;
+    }
+
+    if (vb_right_up) {
+        ry = -127;
+    }
+    else if (vb_right_down) {
+        ry = 127;
+    }
+
+    _dinput_report.z  = (uint8_t)rx;  // Rx
+    _dinput_report.rz = (uint8_t)ry;  // Ry
 }
-
 
 void dinput_bt_end_task()
 {
@@ -596,9 +581,9 @@ uint8_t normalize_axis(uint16_t v)
 {
     // v is 0–4095. Convert to signed (-2048..+2047),
     // then shift to 0–255 with center = 128.
-    int16_t centered = (int16_t)v - 2048;      // now -2048..+2047
-    centered >>= 3;                            // now approx -256..+255
-    return (uint8_t)(centered + 128);          // center becomes 128
+    int16_t centered = (int16_t)v - 2048;
+    centered >>= 3;
+    return (uint8_t)(centered + 128);
 }
 
 void debug_print_input_changes(const i2cinput_input_s *in)
@@ -622,4 +607,3 @@ void debug_print_input_changes(const i2cinput_input_s *in)
         _last_input = *in;
     }
 }
-

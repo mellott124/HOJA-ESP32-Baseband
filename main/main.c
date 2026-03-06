@@ -208,7 +208,7 @@ static void gpio_input_init(void)
 // --------------------------------------------------------------------------
 // RESTART BLUETOOTH PAIRING
 // --------------------------------------------------------------------------
-static void restart_factory_reset(void)
+/* static void restart_factory_reset(void)
 {
     ESP_LOGW(TAG, "Factory reset: clearing paired host...");
     bt_pairing = true; 
@@ -225,7 +225,7 @@ static void restart_factory_reset(void)
     vTaskDelay(pdMS_TO_TICKS(400));
     led_set_state(LED_PAIRING); 
     esp_restart();
-}
+} */
 
 // --------------------------------------------------------------------------
 // CONTROLLER INPUT TASK (reads GPIO + handles SYNC button + LEDs)
@@ -472,7 +472,7 @@ static void controller_task(void* arg)
 
         bool mode_swpro = (get_current_mode() == INPUT_MODE_SWPRO);
         bool mode_n64   = (get_current_mode() == INPUT_MODE_N64);
-		bool mode_dinput= (get_current_mode() == INPUT_MODE_DINPUT);
+		//bool mode_dinput= (get_current_mode() == INPUT_MODE_DINPUT);
 
         // Track whether we matched a Select combo this frame.
         bool consume_select = false;

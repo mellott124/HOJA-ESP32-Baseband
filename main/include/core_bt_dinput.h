@@ -4,16 +4,17 @@
 #include "hoja_includes.h"
 #include "hoja.h"
 
-#define DINPUT_REPORT_SIZE 6   // X Y Z Rz + 16 buttons
+#define DINPUT_REPORT_SIZE 7
 #define DINPUT_REPORT_ID   1
 
-// 6-byte DInput packet:
-// [0] X
-// [1] Y
-// [2] Z
-// [3] Rz
-// [4] Buttons LSB
-// [5] Buttons MSB
+// 7-byte HID packet layout (Report ID 1):
+// [0] Buttons LSB
+// [1] Buttons MSB
+// [2] Hat (low nibble) + padding (high nibble)
+// [3] X
+// [4] Y
+// [5] Rx
+// [6] Ry
 typedef struct
 {
     uint8_t x;
