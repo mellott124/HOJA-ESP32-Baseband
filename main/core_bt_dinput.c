@@ -497,7 +497,9 @@ void dinput_bt_sendinput(i2cinput_input_s *input)
     bool vb_right_right = (input->rx == 65535);
     bool vb_right_down  = (input->ry == 0);
 
-    // BlueRetro VB default mapping discovery status
+    // BlueRetro VB default mapping discovered empirically
+	//
+	// Primary slots
 	// bit 0  = A
 	// bit 3  = B
 	// bit 6  = L
@@ -505,11 +507,19 @@ void dinput_bt_sendinput(i2cinput_input_s *input)
 	// bit 10 = Select
 	// bit 11 = Start
 	//
-	// duplicates observed:
-	// bit 6, 8 	= L
-	// bit 7, 9  	= R 
-	// bit 11, 12 	= Start 
-	// bit 7, 15 	= Select
+	// Duplicate slots
+	// bit 8  = L
+	// bit 9  = R
+	// bit 12 = Start
+	// bit 15 = Select
+	//
+	// Unknown / unused
+	// bit 1
+	// bit 2
+	// bit 4
+	// bit 5
+	// bit 13
+	// bit 14
     enum {
 		BR_SLOT_SELECT = 10, //confirmed!
         BR_SLOT_START  = 11, //confirmed!  //Bit 12 triggers same behavior
