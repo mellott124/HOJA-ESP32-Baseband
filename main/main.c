@@ -55,8 +55,8 @@ static bool bt_connected=false, bt_pairing=false, bt_error=false;
 hoja_settings_s global_loaded_settings={.magic=HOJA_MAGIC_NUM};
 hoja_live_s global_live_data={0};
 
-static volatile uint64_t _app_report_timer_us = 16000;
-static volatile uint64_t _app_report_timer_us_default = 16000;
+static volatile uint64_t _app_report_timer_us = 8000;
+static volatile uint64_t _app_report_timer_us_default = 8000;
 static volatile bool _sniff = true;
 
 uint8_t _i2c_buffer_in[32];
@@ -78,13 +78,13 @@ static void select_boot_mode_from_right_dpad(void)
     bool c_right_pressed = (gpio_get_level(GPIO_BTN_C_R) == 0);
 
     if (c_left_pressed) {
-        current_mode = INPUT_MODE_N64;   // Pro Controller
+        current_mode = INPUT_MODE_N64;   // N64 Profile. Switch Pro Controller
     } else if (c_up_pressed) {
-        current_mode = INPUT_MODE_SNES;    // SNES Controller
+        current_mode = INPUT_MODE_SNES;    // SNES Profile. Switch Pro Controller
     } else if (c_right_pressed) {
-        current_mode = INPUT_MODE_NES;     // NES Controller
+        current_mode = INPUT_MODE_NES;     // NES Profile. Switch Pro Controller
     } else if (c_down_pressed) {
-        current_mode = INPUT_MODE_DINPUT;  // DInput Controller
+        current_mode = INPUT_MODE_DINPUT;  // DInput Controller for PC
     } else {
         current_mode = current_mode;     // default.  Use the global above.
     }
@@ -269,11 +269,11 @@ static void controller_task(void* arg)
         if (combo_now && combo_active) {
             int64_t held_ms = (now_us - combo_start_us) / 1000;
 
-            // Long hold: factory reset after >= 5000 ms (destructive)
-            if (combo_reset_armed && !combo_reset_fired && held_ms >= 5000) {
+            // Long hold: factory reset after >= 3000 ms (destructive)
+            if (combo_reset_armed && !combo_reset_fired && held_ms >= 3000) {
                 combo_reset_fired = true;
                 combo_reset_armed = false;
-                ESP_LOGW(TAG, "SYNC hold >= 5000 ms → factory reset");
+                ESP_LOGW(TAG, "SYNC hold >= 3000 ms → factory reset");
 
                 led_set_state(LED_ERROR);
                 vTaskDelay(pdMS_TO_TICKS(250));
@@ -331,8 +331,9 @@ static void controller_task(void* arg)
         // =====================================================
         switch (get_current_mode())
         {
-            case INPUT_MODE_SWPRO:
-                //Used RED ALARM in NSO VB to map these out to correctly fit the VB controller
+            case INPUT_MODE_SWPRO: //Switch 1/2 and BlueRetro works
+                //Used RED ALARM in NSO VB to map these out to correctly fit the VB controller.
+				//Wario seems to play fine also.
                 //Left Dpad
                 input.dpad_up       = !gpio_get_level(GPIO_BTN_DPAD_U); // D-pad   →Up
                 input.dpad_down     = !gpio_get_level(GPIO_BTN_DPAD_D); // D-pad   →Down
@@ -407,7 +408,8 @@ static void controller_task(void* arg)
                 input.rx = 2048; input.ry = 2048;
                 break;
 
-            case INPUT_MODE_DINPUT:
+            case INPUT_MODE_DINPUT: //Mednafen on PC works
+				//Alt + Shift + 1 to setup Mednafen controller mapping
                 input.button_east  = !gpio_get_level(GPIO_BTN_A);
                 input.button_south = !gpio_get_level(GPIO_BTN_B);
                 input.button_west  = !gpio_get_level(GPIO_BTN_C_L);
@@ -470,12 +472,13 @@ static void controller_task(void* arg)
 
         bool mode_swpro = (get_current_mode() == INPUT_MODE_SWPRO);
         bool mode_n64   = (get_current_mode() == INPUT_MODE_N64);
+		bool mode_dinput= (get_current_mode() == INPUT_MODE_DINPUT);
 
         // Track whether we matched a Select combo this frame.
         bool consume_select = false;
 
         // -----------------------------------------------------
-        // Combo priority (most specific first)
+        // Switch Combo priority (most specific first)
         // -----------------------------------------------------
         if (mode_swpro && sel && trig_l && trig_r) {
             consume_select = true;
@@ -640,7 +643,7 @@ static void controller_task(void* arg)
         else
             switch_bt_sendinput(&input);
 
-        vTaskDelay(pdMS_TO_TICKS(8));  // ~125 Hz
+        vTaskDelay(8/portTICK_PERIOD_MS);  // ~125 Hz
     }
 }
 
@@ -716,8 +719,22 @@ uint64_t get_timestamp_ms(void){ return esp_timer_get_time()/1000ULL; }
 uint64_t get_timestamp_us(void){ return esp_timer_get_time(); }
 uint32_t get_timer_value(void){ return (uint32_t)esp_timer_get_time(); }
 
-void app_set_report_timer(uint64_t t){ _app_report_timer_us_default=t; if(!_sniff)_app_report_timer_us=_app_report_timer_us_default; }
-uint64_t app_get_report_timer(void){ return _app_report_timer_us; }
+/* void app_set_report_timer(uint64_t t){ 
+	_app_report_timer_us_default=t; 
+	
+	if(!_sniff)_app_report_timer_us=_app_report_timer_us_default; 
+	
+} */
+
+void app_set_report_timer(uint64_t t)
+{
+    _app_report_timer_us_default = t;
+    _app_report_timer_us = _app_report_timer_us_default;
+}
+
+uint64_t app_get_report_timer(void){ 
+	return _app_report_timer_us; 
+}
 
 // --------------------------------------------------------------------------
 // APP MAIN

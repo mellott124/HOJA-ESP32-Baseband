@@ -91,8 +91,8 @@ const uint8_t procon_hid_descriptor[PROCON_HID_REPORT_MAP_LEN] = {
     0x05, 0x01,  //   Usage Page (Generic Desktop Ctrls)
     0x09, 0x30,  //   Usage (X)
     0x09, 0x31,  //   Usage (Y)
-    0x09, 0x32,  //   Usage (Rx) //prev 0x33
-    0x09, 0x35,  //   Usage (Ry) //prev 0x34
+    0x09, 0x32,  //   Usage (Z)
+    0x09, 0x35,  //   Usage (Rz)
     0x16, 0x00, 0x00,              //   Logical Minimum (0)
     0x27, 0xFF, 0xFF, 0x00, 0x00,  //   Logical Maximum (65534)
     0x75, 0x10,                    //   Report Size (16)
@@ -380,7 +380,7 @@ void switch_bt_hidd_cb(void *handler_args, esp_event_base_t base, int32_t id, vo
                 if (_switch_paired) {
 					// Adaptive reconnect timing
 					int64_t uptime_ms = esp_timer_get_time() / 1000;
-					int reconnect_delay = (uptime_ms < 3000) ? 3000 : 400;  // longer on cold boot, short after reset
+					int reconnect_delay = (uptime_ms < 3000) ? 1000 : 400;  // longer on cold boot, short after reset
 
 					ESP_LOGI(TAG,
 							 "Known host found — waiting %d ms before reconnect...",
