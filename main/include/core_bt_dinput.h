@@ -24,6 +24,8 @@ typedef struct
     uint16_t buttons;
 } __attribute__((packed)) dinput_report_s;
 
+input_mode_t get_current_mode(void);
+
 void dinput_bt_sendinput(i2cinput_input_s *input);
 
 int  core_bt_dinput_start(void);

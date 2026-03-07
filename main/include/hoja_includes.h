@@ -51,15 +51,15 @@
 
 typedef enum
 {
-    INPUT_MODE_LOAD     = -1,
-    INPUT_MODE_SWPRO    = 0,
-    INPUT_MODE_DINPUT   = 1,
-    INPUT_MODE_GCUSB    = 2,
-    INPUT_MODE_GAMECUBE = 3,
-    INPUT_MODE_N64      = 4,
-    INPUT_MODE_SNES     = 5,
-    INPUT_MODE_SINPUT   = 6,
-	INPUT_MODE_NES      = 7,
+    INPUT_MODE_LOAD         = -1,
+    INPUT_MODE_SWPRO        = 0,
+    INPUT_MODE_DINPUT_BR    = 1,
+    INPUT_MODE_DINPUT_VBGO  = 2,
+    INPUT_MODE_GCUSB        = 3,
+    INPUT_MODE_GAMECUBE     = 4,
+    INPUT_MODE_N64          = 5,
+    INPUT_MODE_SNES         = 6,
+    INPUT_MODE_SINPUT       = 7,
     INPUT_MODE_MAX,
 } input_mode_t;
 

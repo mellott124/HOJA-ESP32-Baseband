@@ -78,11 +78,6 @@ void ns_report_sub_setdevinfo(uint8_t *buffer)
           buffer[16] = 0x0B;
           buffer[17] = 0x02;
           break;
-		  
-	  case INPUT_MODE_NES:
-          buffer[16] = 0x09;
-          buffer[17] = 0x02;
-          break;
 
       case INPUT_MODE_N64:
       default:

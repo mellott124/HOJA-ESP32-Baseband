@@ -34,11 +34,11 @@
 // --------------------------------------------------------------------------
 #define GPIO_BTN_A          GPIO_NUM_35
 #define GPIO_BTN_B          GPIO_NUM_32
-#define GPIO_BTN_DPAD_U     GPIO_NUM_14 
+#define GPIO_BTN_DPAD_U     GPIO_NUM_14
 #define GPIO_BTN_DPAD_L     GPIO_NUM_7
 #define GPIO_BTN_DPAD_D     GPIO_NUM_8
 #define GPIO_BTN_DPAD_R     GPIO_NUM_13
-#define GPIO_BTN_C_U        GPIO_NUM_34 
+#define GPIO_BTN_C_U        GPIO_NUM_34
 #define GPIO_BTN_C_L        GPIO_NUM_33
 #define GPIO_BTN_C_D        GPIO_NUM_38
 #define GPIO_BTN_C_R        GPIO_NUM_39
@@ -78,37 +78,36 @@ static void select_boot_mode_from_right_dpad(void)
     bool c_right_pressed = (gpio_get_level(GPIO_BTN_C_R) == 0);
 
     if (c_left_pressed) {
-        current_mode = INPUT_MODE_N64;   // N64 Profile. Switch Pro Controller
+        current_mode = INPUT_MODE_DINPUT_BR;      // BlueRetro / general PC DInput mode
     } else if (c_up_pressed) {
-        current_mode = INPUT_MODE_SNES;    // SNES Profile. Switch Pro Controller
+        current_mode = INPUT_MODE_DINPUT_VBGO;    // VBGo-optimized DInput mode
     } else if (c_right_pressed) {
-        current_mode = INPUT_MODE_NES;     // NES Profile. Switch Pro Controller
+        current_mode = INPUT_MODE_SNES;           // SNES mode
     } else if (c_down_pressed) {
-        current_mode = INPUT_MODE_DINPUT;  // DInput Controller for PC and BlueRetro
+        current_mode = INPUT_MODE_N64;            // N64 mode
     } else {
-        current_mode = current_mode;     // default.  Use the global above.
+        current_mode = INPUT_MODE_SWPRO;          // Default: Switch Pro mode
     }
 
-    if (get_current_mode() == INPUT_MODE_DINPUT) {
-		ESP_LOGI(TAG, "Stored paired host (DInput): %02X:%02X:%02X:%02X:%02X:%02X",
-				 global_loaded_settings.paired_host_dinput_mac[0],
-				 global_loaded_settings.paired_host_dinput_mac[1],
-				 global_loaded_settings.paired_host_dinput_mac[2],
-				 global_loaded_settings.paired_host_dinput_mac[3],
-				 global_loaded_settings.paired_host_dinput_mac[4],
-				 global_loaded_settings.paired_host_dinput_mac[5]);
-	} else {
-		ESP_LOGI(TAG, "Stored paired host (Switch): %02X:%02X:%02X:%02X:%02X:%02X",
-				 global_loaded_settings.paired_host_switch_mac[0],
-				 global_loaded_settings.paired_host_switch_mac[1],
-				 global_loaded_settings.paired_host_switch_mac[2],
-				 global_loaded_settings.paired_host_switch_mac[3],
-				 global_loaded_settings.paired_host_switch_mac[4],
-				 global_loaded_settings.paired_host_switch_mac[5]);
-	}
+    if ((get_current_mode() == INPUT_MODE_DINPUT_BR) ||
+        (get_current_mode() == INPUT_MODE_DINPUT_VBGO)) {
+        ESP_LOGI(TAG, "Stored paired host (DInput): %02X:%02X:%02X:%02X:%02X:%02X",
+                 global_loaded_settings.paired_host_dinput_mac[0],
+                 global_loaded_settings.paired_host_dinput_mac[1],
+                 global_loaded_settings.paired_host_dinput_mac[2],
+                 global_loaded_settings.paired_host_dinput_mac[3],
+                 global_loaded_settings.paired_host_dinput_mac[4],
+                 global_loaded_settings.paired_host_dinput_mac[5]);
+    } else {
+        ESP_LOGI(TAG, "Stored paired host (Switch): %02X:%02X:%02X:%02X:%02X:%02X",
+                 global_loaded_settings.paired_host_switch_mac[0],
+                 global_loaded_settings.paired_host_switch_mac[1],
+                 global_loaded_settings.paired_host_switch_mac[2],
+                 global_loaded_settings.paired_host_switch_mac[3],
+                 global_loaded_settings.paired_host_switch_mac[4],
+                 global_loaded_settings.paired_host_switch_mac[5]);
+    }
 
-
-    // Optional: visual LED feedback (e.g. blink pattern per mode)
     led_set_state(LED_PAIRING);
 }
 
@@ -149,9 +148,6 @@ void app_settings_load(void)
     }
     nvs_close(h);
 
-    // ---------------------------------------------------------------------
-    // Ensure new pairing flags exist and are valid
-    // ---------------------------------------------------------------------
     if (!global_loaded_settings.has_paired_switch &&
         memcmp(global_loaded_settings.paired_host_switch_mac, "\0\0\0\0\0\0", 6) != 0) {
         global_loaded_settings.has_paired_switch = true;
@@ -161,20 +157,14 @@ void app_settings_load(void)
         global_loaded_settings.has_paired_dinput = true;
     }
 
-    // ---------------------------------------------------------------------
-    // Initialize the new DInput device MAC if missing
-    // ---------------------------------------------------------------------
     if (memcmp(global_loaded_settings.device_mac_dinput, "\0\0\0\0\0\0", 6) == 0) {
         ESP_LOGI(TAG, "Generating independent DInput MAC from Switch MAC...");
         memcpy(global_loaded_settings.device_mac_dinput,
                global_loaded_settings.device_mac_switch, 6);
-        global_loaded_settings.device_mac_dinput[5] += 3;  // offset ensures unique identity
+        global_loaded_settings.device_mac_dinput[5] += 3;
         app_settings_save();
     }
 
-    // ---------------------------------------------------------------------
-    // Validate struct magic and reset if needed
-    // ---------------------------------------------------------------------
     if (global_loaded_settings.magic != HOJA_MAGIC_NUM) {
         ESP_LOGW(TAG, "Settings invalid — restoring defaults");
         memset(&global_loaded_settings, 0, sizeof(global_loaded_settings));
@@ -206,28 +196,6 @@ static void gpio_input_init(void)
 }
 
 // --------------------------------------------------------------------------
-// RESTART BLUETOOTH PAIRING
-// --------------------------------------------------------------------------
-/* static void restart_factory_reset(void)
-{
-    ESP_LOGW(TAG, "Factory reset: clearing paired host...");
-    bt_pairing = true; 
-    bt_connected = false; 
-    bt_error = false;
-
-    memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
-	memset(global_loaded_settings.paired_host_dinput_mac, 0, 6);
-	global_loaded_settings.has_paired_dinput = false;
-	global_loaded_settings.has_paired_switch = false;
-    app_settings_save();
-
-    led_set_state(LED_ERROR);  
-    vTaskDelay(pdMS_TO_TICKS(400));
-    led_set_state(LED_PAIRING); 
-    esp_restart();
-} */
-
-// --------------------------------------------------------------------------
 // CONTROLLER INPUT TASK (reads GPIO + handles SYNC button + LEDs)
 // --------------------------------------------------------------------------
 static void controller_task(void* arg)
@@ -237,18 +205,16 @@ static void controller_task(void* arg)
 
     while (true)
     {
-        // Start each frame clean so no stale bits carry between modes/frames.
         memset(&input, 0, sizeof(input));
 
         // =====================================================
         // SYNC combo — L + R + C-Down
-        //   < 5000 ms : no-op
-        //   >= 3000 ms: mode-specific re-pair / change host (destructive)
+        //   >= 3000 ms: mode-specific re-pair / change host
         // =====================================================
-        static bool   combo_active = false;
+        static bool    combo_active = false;
         static int64_t combo_start_us = 0;
-        static bool   combo_reset_fired = false;
-        static bool   combo_reset_armed = true;
+        static bool    combo_reset_fired = false;
+        static bool    combo_reset_armed = true;
 
         bool combo_now = (!gpio_get_level(GPIO_BTN_L) &&
                           !gpio_get_level(GPIO_BTN_R) &&
@@ -281,7 +247,8 @@ static void controller_task(void* arg)
 
                 switch (mode) {
 
-                    case INPUT_MODE_DINPUT:
+                    case INPUT_MODE_DINPUT_BR:
+                    case INPUT_MODE_DINPUT_VBGO:
                         ESP_LOGW(TAG, "Clearing DInput pairing…");
 
                         memset(global_loaded_settings.paired_host_dinput_mac, 0, 6);
@@ -295,7 +262,6 @@ static void controller_task(void* arg)
 
                     case INPUT_MODE_SWPRO:
                     case INPUT_MODE_SNES:
-                    case INPUT_MODE_NES:
                     case INPUT_MODE_N64:
                         ESP_LOGW(TAG, "Clearing Switch-family pairing ONLY");
                         memset(global_loaded_settings.paired_host_switch_mac, 0, 6);
@@ -321,7 +287,7 @@ static void controller_task(void* arg)
         }
 
         // =====================================================
-        // MAIN CONTROLLER MAPPING (base buttons per mode)
+        // MAIN CONTROLLER MAPPING
         // =====================================================
         switch (get_current_mode())
         {
@@ -333,16 +299,16 @@ static void controller_task(void* arg)
 
                 input.lx            = 2048;
                 input.ly            = 2048;
-
                 input.rx            = 2048;
                 input.ry            = 2048;
+
                 if (!gpio_get_level(GPIO_BTN_C_R)) input.rx = 4095;
                 else if (!gpio_get_level(GPIO_BTN_C_L)) input.rx = 0;
                 if (!gpio_get_level(GPIO_BTN_C_U)) input.ry = 4095;
                 else if (!gpio_get_level(GPIO_BTN_C_D)) input.ry = 0;
 
                 input.button_plus   = !gpio_get_level(GPIO_BTN_START);
-                input.button_minus  = false; // handled below
+                input.button_minus  = false;
 
                 input.button_east   = !gpio_get_level(GPIO_BTN_A);
                 input.button_south  = !gpio_get_level(GPIO_BTN_B);
@@ -379,24 +345,8 @@ static void controller_task(void* arg)
                 input.rx = 2048; input.ry = 2048;
                 break;
 
-            case INPUT_MODE_NES:
-                input.button_east   = !gpio_get_level(GPIO_BTN_A);
-                input.button_south  = !gpio_get_level(GPIO_BTN_B);
-                input.dpad_up       = !gpio_get_level(GPIO_BTN_DPAD_U);
-                input.dpad_down     = !gpio_get_level(GPIO_BTN_DPAD_D);
-                input.dpad_left     = !gpio_get_level(GPIO_BTN_DPAD_L);
-                input.dpad_right    = !gpio_get_level(GPIO_BTN_DPAD_R);
-                input.trigger_l     = !gpio_get_level(GPIO_BTN_L);
-                input.trigger_r     = !gpio_get_level(GPIO_BTN_R);
-                input.trigger_zl    = false;
-                input.trigger_zr    = false;
-                input.button_plus   = !gpio_get_level(GPIO_BTN_START);
-                input.button_minus  = !gpio_get_level(GPIO_BTN_SELECT);
-                input.lx = 2048; input.ly = 2048;
-                input.rx = 2048; input.ry = 2048;
-                break;
-
-            case INPUT_MODE_DINPUT:
+            case INPUT_MODE_DINPUT_BR:
+            case INPUT_MODE_DINPUT_VBGO:
                 input.button_east   = !gpio_get_level(GPIO_BTN_A);
                 input.button_south  = !gpio_get_level(GPIO_BTN_B);
                 input.button_west   = !gpio_get_level(GPIO_BTN_C_L);
@@ -407,18 +357,18 @@ static void controller_task(void* arg)
                 input.dpad_left     = !gpio_get_level(GPIO_BTN_DPAD_L);
                 input.dpad_right    = !gpio_get_level(GPIO_BTN_DPAD_R);
 
-                input.lt            = !gpio_get_level(GPIO_BTN_L) ? 0xFF : 0x00;
-                input.rt            = !gpio_get_level(GPIO_BTN_R) ? 0xFF : 0x00;
+                input.lt            = 0x00;
+                input.rt            = 0x00;
 
                 input.rx            = !gpio_get_level(GPIO_BTN_C_R) ? 0xFFFF : 0x7FFF;
                 input.ry            = !gpio_get_level(GPIO_BTN_C_D) ? 0x0000 : 0x7FFF;
 
                 input.button_plus   = !gpio_get_level(GPIO_BTN_START);
-                input.button_minus  = !gpio_get_level(GPIO_BTN_SELECT); // immediate select
+                input.button_minus  = false;
                 input.trigger_l     = !gpio_get_level(GPIO_BTN_L);
                 input.trigger_r     = !gpio_get_level(GPIO_BTN_R);
-                input.trigger_zl    = false; // synthetic X
-                input.trigger_zr    = false; // synthetic Y
+                input.trigger_zl    = false;
+                input.trigger_zr    = false;
                 break;
 
             case INPUT_MODE_N64:
@@ -456,9 +406,10 @@ static void controller_task(void* arg)
 
         bool mode_swpro  = (get_current_mode() == INPUT_MODE_SWPRO);
         bool mode_n64    = (get_current_mode() == INPUT_MODE_N64);
-        bool mode_dinput = (get_current_mode() == INPUT_MODE_DINPUT);
+        bool mode_dinput = ((get_current_mode() == INPUT_MODE_DINPUT_BR) ||
+                            (get_current_mode() == INPUT_MODE_DINPUT_VBGO));
 
-        // --- SWPRO: keep your existing behavior ---
+        // --- SWPRO ---
         if (mode_swpro) {
             static bool    sel_prev = false;
             static bool    sel_modified = false;
@@ -545,7 +496,7 @@ static void controller_task(void* arg)
             }
         }
 
-        // --- N64: keep your existing behavior ---
+        // --- N64 ---
         if (mode_n64) {
             if (sel && trig_l && trig_r) {
                 input.button_stick_left = true;
@@ -556,43 +507,109 @@ static void controller_task(void* arg)
             }
         }
 
-        // --- DINPUT: basic direct held combos ---
+        // --- DINPUT ---
         if (mode_dinput) {
-            if (sel && trig_l && !trig_r) {
-                input.trigger_zl   = true;   // X
-                input.button_minus = false;  // suppress Select
-                input.trigger_l    = false;  // suppress L
-                input.lt           = 0x00;   // suppress LT
+            static bool    dsel_prev = false;
+            static bool    dsel_modified = false;
+            static uint8_t dminus_pulse = 0;
+
+            static uint8_t dinput_lr_pending = 0;
+            static uint8_t dinput_lr_wait_frames = 0;
+            const uint8_t DINPUT_LR_GRACE_FRAMES = 6;
+
+            bool d_combo_x = sel && trig_l && !trig_r;
+            bool d_combo_y = sel && trig_r && !trig_l;
+
+            bool d_consume_select = d_combo_x || d_combo_y;
+            bool d_any_modifier   = trig_l || trig_r;
+
+            if (dminus_pulse > 0) {
+                input.button_minus = true;
+                dminus_pulse--;
             }
-            else if (sel && trig_r && !trig_l) {
-                input.trigger_zr   = true;   // Y
-                input.button_minus = false;  // suppress Select
-                input.trigger_r    = false;  // suppress R
-                input.rt           = 0x00;   // suppress RT
+
+            if (sel) {
+                if (d_any_modifier || d_consume_select) {
+                    dsel_modified = true;
+                }
+            } else {
+                if (dsel_prev && !dsel_modified) {
+                    dminus_pulse = 3;
+                }
+                dsel_modified = false;
+            }
+            dsel_prev = sel;
+
+            if (!sel) {
+                dinput_lr_pending = 0;
+                dinput_lr_wait_frames = 0;
+            } else {
+                if (trig_l && trig_r) {
+                    dinput_lr_pending = 0;
+                    dinput_lr_wait_frames = 0;
+                } else if (trig_l ^ trig_r) {
+                    uint8_t side = trig_l ? 1 : 2;
+                    if (dinput_lr_pending != side) {
+                        dinput_lr_pending = side;
+                        dinput_lr_wait_frames = 0;
+                    }
+                    if (dinput_lr_wait_frames < 255) dinput_lr_wait_frames++;
+                } else {
+                    dinput_lr_pending = 0;
+                    dinput_lr_wait_frames = 0;
+                }
+            }
+
+            if (sel && dinput_lr_pending != 0) {
+                input.button_minus = false;
+
+                if (dinput_lr_pending == 1) {
+                    input.trigger_l = false;
+                } else if (dinput_lr_pending == 2) {
+                    input.trigger_r = false;
+                }
+            }
+
+            if (sel &&
+                dinput_lr_pending == 1 &&
+                dinput_lr_wait_frames >= DINPUT_LR_GRACE_FRAMES &&
+                trig_l && !trig_r) {
+                input.trigger_zl   = true;
+                input.button_minus = false;
+                input.trigger_l    = false;
+            }
+            else if (sel &&
+                     dinput_lr_pending == 2 &&
+                     dinput_lr_wait_frames >= DINPUT_LR_GRACE_FRAMES &&
+                     trig_r && !trig_l) {
+                input.trigger_zr   = true;
+                input.button_minus = false;
+                input.trigger_r    = false;
             }
         }
 
         // =====================================================
         // SEND FINAL INPUT REPORT
         // =====================================================
-        if (get_current_mode() == INPUT_MODE_DINPUT)
+        if ((get_current_mode() == INPUT_MODE_DINPUT_BR) ||
+            (get_current_mode() == INPUT_MODE_DINPUT_VBGO))
             dinput_bt_sendinput(&input);
         else
             switch_bt_sendinput(&input);
 
-        vTaskDelay(8/portTICK_PERIOD_MS);  // ~125 Hz
+        vTaskDelay(8/portTICK_PERIOD_MS);
     }
 }
 
 // --------------------------------------------------------------------------
-// HOJA CALLBACK STUBS (unchanged)
+// HOJA CALLBACK STUBS
 // --------------------------------------------------------------------------
 void app_set_connected_status(uint8_t s)
 {
     bt_connected = (s != 0);
     bt_pairing = !bt_connected;
     bt_error = false;
-    led_set_player_number(s);  // this now triggers blink + solid
+    led_set_player_number(s);
 }
 
 void app_set_standard_haptic(uint8_t l,uint8_t r){ (void)l; (void)r; }
@@ -601,9 +618,7 @@ void app_set_sinput_haptic(uint8_t*d,uint8_t l){ (void)d; (void)l; }
 void app_set_switch_haptic(uint8_t *d)
 {
     if (!d) return;
-    /* ESP_LOGI("HAPTIC", "Rumble data received:");
-    ESP_LOG_BUFFER_HEX("HAPTIC", d, 8); */
-    haptics_rumble_translate(d);  // 
+    haptics_rumble_translate(d);
 }
 
 void app_set_power_setting(i2c_power_code_t p){ (void)p; }
@@ -616,7 +631,8 @@ void app_save_host_mac(input_mode_t m, uint8_t *a)
 
     switch (m)
     {
-        case INPUT_MODE_DINPUT:
+        case INPUT_MODE_DINPUT_BR:
+        case INPUT_MODE_DINPUT_VBGO:
             if (memcmp(global_loaded_settings.paired_host_dinput_mac, a, 6) != 0)
             {
                 memcpy(global_loaded_settings.paired_host_dinput_mac, a, 6);
@@ -629,7 +645,6 @@ void app_save_host_mac(input_mode_t m, uint8_t *a)
 
         case INPUT_MODE_SWPRO:
         case INPUT_MODE_SNES:
-        case INPUT_MODE_NES:
         case INPUT_MODE_N64:
         default:
             if (memcmp(global_loaded_settings.paired_host_switch_mac, a, 6) != 0)
@@ -649,19 +664,11 @@ void app_save_host_mac(input_mode_t m, uint8_t *a)
     }
 }
 
-
 bool app_compare_mac(uint8_t*a,uint8_t*b){ return memcmp(a,b,6)==0; }
 
 uint64_t get_timestamp_ms(void){ return esp_timer_get_time()/1000ULL; }
 uint64_t get_timestamp_us(void){ return esp_timer_get_time(); }
 uint32_t get_timer_value(void){ return (uint32_t)esp_timer_get_time(); }
-
-/* void app_set_report_timer(uint64_t t){ 
-	_app_report_timer_us_default=t; 
-	
-	if(!_sniff)_app_report_timer_us=_app_report_timer_us_default; 
-	
-} */
 
 void app_set_report_timer(uint64_t t)
 {
@@ -669,8 +676,8 @@ void app_set_report_timer(uint64_t t)
     _app_report_timer_us = _app_report_timer_us_default;
 }
 
-uint64_t app_get_report_timer(void){ 
-	return _app_report_timer_us; 
+uint64_t app_get_report_timer(void){
+    return _app_report_timer_us;
 }
 
 // --------------------------------------------------------------------------
@@ -699,17 +706,15 @@ void app_main(void)
     led_boot_sweep();
     led_set_state(LED_IDLE);
 
-    // 🌈 Select mode before BT start
     select_boot_mode_from_right_dpad();
 
-    // Optional LED feedback per mode
     switch (get_current_mode()) {
-        case INPUT_MODE_SWPRO:  led_set_state(LED_PAIRING);   break;   // Blue
-        case INPUT_MODE_SNES:   led_set_state(LED_CONNECTED); break;   // Green
-        case INPUT_MODE_NES:    led_set_state(LED_CONNECTED); break;   // Green
-        case INPUT_MODE_DINPUT: led_set_state(LED_DINPUT);    break;   // Purple
+        case INPUT_MODE_SWPRO:       led_set_state(LED_PAIRING);   break;
+        case INPUT_MODE_SNES:        led_set_state(LED_CONNECTED); break;
+        case INPUT_MODE_DINPUT_BR:   led_set_state(LED_DINPUT);    break;
+        case INPUT_MODE_DINPUT_VBGO: led_set_state(LED_DINPUT);    break;
         case INPUT_MODE_N64:
-        default:                led_set_state(LED_IDLE);      break;   // Blue
+        default:                     led_set_state(LED_IDLE);      break;
     }
 
     uint8_t base_mac[6];
@@ -720,12 +725,10 @@ void app_main(void)
 
     esp_base_mac_addr_set(base_mac);
 
-    // ------------------------------------------------------
-    // FIXED: Correctly display the stored paired host per mode
-    // ------------------------------------------------------
     switch (get_current_mode())
     {
-        case INPUT_MODE_DINPUT:
+        case INPUT_MODE_DINPUT_BR:
+        case INPUT_MODE_DINPUT_VBGO:
             ESP_LOGI(TAG, "Stored paired host (DInput): %02X:%02X:%02X:%02X:%02X:%02X",
                 global_loaded_settings.paired_host_dinput_mac[0],
                 global_loaded_settings.paired_host_dinput_mac[1],
@@ -737,7 +740,6 @@ void app_main(void)
 
         case INPUT_MODE_SWPRO:
         case INPUT_MODE_SNES:
-        case INPUT_MODE_NES:
         case INPUT_MODE_N64:
         default:
             ESP_LOGI(TAG, "Stored paired host (Switch): %02X:%02X:%02X:%02X:%02X:%02X",
@@ -750,26 +752,25 @@ void app_main(void)
             break;
     }
 
-    // Log emulated identity
     ESP_LOGI(TAG, "Emulating as: %s",
-        get_current_mode() == INPUT_MODE_SWPRO ? "Pro Controller" :
-        get_current_mode() == INPUT_MODE_SNES  ? "SNES Controller" :
-        get_current_mode() == INPUT_MODE_NES   ? "NES Controller" :
-        get_current_mode() == INPUT_MODE_N64   ? "N64 Controller" :
-        get_current_mode() == INPUT_MODE_DINPUT ? "DInput Controller" :
+        get_current_mode() == INPUT_MODE_SWPRO       ? "Pro Controller" :
+        get_current_mode() == INPUT_MODE_SNES        ? "SNES Controller" :
+        get_current_mode() == INPUT_MODE_N64         ? "N64 Controller" :
+        get_current_mode() == INPUT_MODE_DINPUT_BR   ? "DInput Controller (BlueRetro)" :
+        get_current_mode() == INPUT_MODE_DINPUT_VBGO ? "DInput Controller (VBGo)" :
         "Unknown");
 
     int bt_status = 0;
 
     switch (get_current_mode()) {
-        case INPUT_MODE_DINPUT:
+        case INPUT_MODE_DINPUT_BR:
+        case INPUT_MODE_DINPUT_VBGO:
             ESP_LOGI(TAG, "Starting DInput mode...");
             bt_status = core_bt_dinput_start();
             break;
 
         case INPUT_MODE_SWPRO:
         case INPUT_MODE_SNES:
-        case INPUT_MODE_NES:
         case INPUT_MODE_N64:
         default:
             ESP_LOGI(TAG, "Starting Switch mode...");
@@ -792,4 +793,3 @@ void app_main(void)
     bt_pairing = true;
     xTaskCreatePinnedToCore(controller_task, "controller_task", 4096, NULL, 1, NULL, 1);
 }
-

@@ -160,8 +160,14 @@ void dinput_bt_gap_cb(esp_bt_gap_cb_event_t event,
 
                 if (!_dinput_paired) {
                     _dinput_paired = true;
-                    app_save_host_mac(INPUT_MODE_DINPUT,
-                                      &param->auth_cmpl.bda[0]);
+
+                    input_mode_t mode = get_current_mode();
+                    if (mode != INPUT_MODE_DINPUT_BR &&
+                        mode != INPUT_MODE_DINPUT_VBGO) {
+                        mode = INPUT_MODE_DINPUT_BR;
+                    }
+
+                    app_save_host_mac(mode, &param->auth_cmpl.bda[0]);
                 }
             } else {
                 ESP_LOGI(TAG, "auth failed");
@@ -434,48 +440,15 @@ void _dinput_bt_task(void *parameters)
 // ============================================================================
 // IMPORTANT: HOJA INPUT FIELD INTERPRETATION
 // ============================================================================
-//
-// HOJA input fields (button_north, button_west, rx, ry, ax, ay, etc.) DO NOT
-// have semantic meaning. They DO NOT represent Up/Down/Left/Right or X/Y/Z.
-//
-// They are simply BIT LANES coming out of the HOJA input multiplexer.
-// The meaning of each bit depends entirely on the controller mode:
-//   • Virtual Boy mode
-//   • N64 mode
-//   • Switch Pro mode
-//   • SNES mode
-//   • Others...
-//
-// For example:
-//   - In VB mode, right-dpad UP appears on input->button_north
-//   - In another mode, input->button_north might be "X button"
-//   - In another, it might represent "face button west"
-//   - rx/ry fields are ALWAYS populated (analog reads) and must not be used
-//     as boolean truth tests.
-//
-// Because of this, we must *never* rely on HOJA field NAMES to infer direction
-// or meaning. They are simply signals.
-//
-// Instead, we derive meaning only from:
-//   1. Real debug logs that show which HOJA bit fires for each VB button
-//   2. Explicit comparisons (e.g., input->rx == 0xFFFF) instead of boolean tests
-//
-// This prevents:
-//   - Wrong direction detection
-//   - Axes stuck at max
-//   - Inputs firing continuously
-//   - Drift between modes
-//
-// Summary:
-//   Treat HOJA fields as raw wires, not meaningful names.
-//   Only map based on your validated debug table.
-//
-// ============================================================================
 void dinput_bt_sendinput(i2cinput_input_s *input)
 {
     if (!input) return;
 
     //debug_print_input_changes(input);
+
+    input_mode_t mode = get_current_mode();
+    bool is_br   = (mode == INPUT_MODE_DINPUT_BR);
+    bool is_vbgo = (mode == INPUT_MODE_DINPUT_VBGO);
 
     // VB semantic buttons (derived from HOJA fields for DInput mode)
     bool vb_a      = input->button_east;
@@ -485,10 +458,9 @@ void dinput_bt_sendinput(i2cinput_input_s *input)
     bool vb_start  = input->button_plus;
     bool vb_select = input->button_minus;
 
-    //Synthetic DInput-only semantic buttons generated upstream in controller_task()
+    // Synthetic DInput-only semantic buttons generated upstream in controller_task()
     bool vbgo_x    = input->trigger_zl;  // Select + L combo
-    bool vbgo_y    = input->trigger_zr;  // Select + R combo 
-
+    bool vbgo_y    = input->trigger_zr;  // Select + R combo
 
     // VB left d-pad
     bool vb_left_up    = input->dpad_up;
@@ -502,64 +474,57 @@ void dinput_bt_sendinput(i2cinput_input_s *input)
     bool vb_right_right = (input->rx == 0xFFFF);
     bool vb_right_down  = (input->ry == 0x0000);
 
-    // BlueRetro VB default mapping discovered empirically
+    // ----------------------------------------------------------------------
+    // DInput button slot mapping
     //
-    // Primary slots
-    // bit 0  = A
-    // bit 3  = B
-    // bit 6  = L
-    // bit 7  = R
-    // bit 10 = Select
-    // bit 11 = Start
+    // BR mode:
+    //   bit 0  = A
+    //   bit 3  = B
+    //   bit 6  = L
+    //   bit 7  = R
+    //   bit 10 = Select
+    //   bit 11 = Start
     //
-    // Duplicate / synthetic slots
-    // bit 1  = B      // added for Meta Quest / VBGo compatibility
-    // bit 3  = VBGo X // synthetic combo from controller_task() via trigger_zl
-    // bit 4  = VBGo Y // synthetic combo from controller_task() via trigger_zr
-    // bit 8  = L
-    // bit 9  = R
-    // bit 12 = Start
-    // bit 15 = Select
+    // VBGO mode:
+    //   bit 0  = A
+    //   bit 1  = B
+    //   bit 3  = X (synthetic Select+L)
+    //   bit 4  = Y (synthetic Select+R)
+    //   bit 6  = L
+    //   bit 7  = R
+    //   bit 10 = Select
+    //   bit 11 = Start
     //
-    // Unknown / unused
-    // bit 5
-    // bit 13
-    // bit 14
+    // This split avoids BR B-button contamination while preserving
+    // VBGO/Quest-specific X/Y behavior.
+    // ----------------------------------------------------------------------
     enum {
-        BR_SLOT_SELECT = 10, // confirmed!
-        BR_SLOT_START  = 11, // confirmed! // bit 12 triggers same behavior
-        BR_SLOT_A      = 0,  // confirmed!
-        BR_SLOT_B      = 3,  // confirmed!
-        BR_SLOT_B_DUP  = 1,  // added for Quest/VBGo
-        BR_SLOT_VBGO_X = 3,  // synthetic X uses bit 3 only
-        BR_SLOT_VBGO_Y = 4,  // synthetic Y uses bit 4
-        BR_SLOT_L      = 6,  // confirmed!
-        BR_SLOT_R      = 7,  // confirmed! // bit 9 triggers same behavior
+        D_SLOT_A      = 0,
+        D_SLOT_B_VBGO = 1,
+        D_SLOT_B_BR   = 3,
+        D_SLOT_X_VBGO = 3,
+        D_SLOT_Y_VBGO = 4,
+        D_SLOT_L      = 6,
+        D_SLOT_R      = 7,
+        D_SLOT_SELECT = 10,
+        D_SLOT_START  = 11,
     };
 
     uint16_t b = 0;
 
-    b |= vb_select << BR_SLOT_SELECT;
-    b |= vb_start  << BR_SLOT_START;
-    b |= vb_a      << BR_SLOT_A;
-    b |= vb_l      << BR_SLOT_L;
-    b |= vb_r      << BR_SLOT_R;
+    if (vb_a)      b |= (1U << D_SLOT_A);
+    if (vb_l)      b |= (1U << D_SLOT_L);
+    if (vb_r)      b |= (1U << D_SLOT_R);
+    if (vb_select) b |= (1U << D_SLOT_SELECT);
+    if (vb_start)  b |= (1U << D_SLOT_START);
 
-    // Normal B path: duplicate on bits 3 and 1
-    if (vb_b) {
-        b |= (1U << BR_SLOT_B);
-        b |= (1U << BR_SLOT_B_DUP);
-    }
-
-    // Synthetic VBGo X/Y come from controller_task()
-    // X intentionally uses bit 3 ONLY, without bit 1
-    if (vbgo_x) {
-        b &= ~(1U << BR_SLOT_B_DUP);
-        b |=  (1U << BR_SLOT_VBGO_X);
-    }
-
-    if (vbgo_y) {
-        b |= (1U << BR_SLOT_VBGO_Y);
+    if (is_vbgo) {
+        if (vb_b)    b |= (1U << D_SLOT_B_VBGO);
+        if (vbgo_x)  b |= (1U << D_SLOT_X_VBGO);
+        if (vbgo_y)  b |= (1U << D_SLOT_Y_VBGO);
+    } else {
+        // Default DINPUT_BR behavior
+        if (vb_b)    b |= (1U << D_SLOT_B_BR);
     }
 
     _dinput_report.buttons = b;
