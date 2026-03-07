@@ -364,7 +364,13 @@ static void controller_task(void* arg)
                 input.ry            = !gpio_get_level(GPIO_BTN_C_D) ? 0x0000 : 0x7FFF;
 
                 input.button_plus   = !gpio_get_level(GPIO_BTN_START);
-                input.button_minus  = false;
+
+                if (get_current_mode() == INPUT_MODE_DINPUT_BR) {
+                    input.button_minus = !gpio_get_level(GPIO_BTN_SELECT);
+                } else {
+                    input.button_minus = false;
+                }
+
                 input.trigger_l     = !gpio_get_level(GPIO_BTN_L);
                 input.trigger_r     = !gpio_get_level(GPIO_BTN_R);
                 input.trigger_zl    = false;
@@ -507,84 +513,90 @@ static void controller_task(void* arg)
             }
         }
 
-        // --- DINPUT ---
+                // --- DINPUT ---
         if (mode_dinput) {
-            static bool    dsel_prev = false;
-            static bool    dsel_modified = false;
-            static uint8_t dminus_pulse = 0;
+            if (get_current_mode() == INPUT_MODE_DINPUT_VBGO) {
+                static bool    dsel_prev = false;
+                static bool    dsel_modified = false;
+                static uint8_t dminus_pulse = 0;
 
-            static uint8_t dinput_lr_pending = 0;
-            static uint8_t dinput_lr_wait_frames = 0;
-            const uint8_t DINPUT_LR_GRACE_FRAMES = 6;
+                static uint8_t dinput_lr_pending = 0;
+                static uint8_t dinput_lr_wait_frames = 0;
+                const uint8_t DINPUT_LR_GRACE_FRAMES = 6;
 
-            bool d_combo_x = sel && trig_l && !trig_r;
-            bool d_combo_y = sel && trig_r && !trig_l;
+                bool d_combo_x = sel && trig_l && !trig_r;
+                bool d_combo_y = sel && trig_r && !trig_l;
 
-            bool d_consume_select = d_combo_x || d_combo_y;
-            bool d_any_modifier   = trig_l || trig_r;
+                bool d_consume_select = d_combo_x || d_combo_y;
+                bool d_any_modifier   = trig_l || trig_r;
 
-            if (dminus_pulse > 0) {
-                input.button_minus = true;
-                dminus_pulse--;
-            }
-
-            if (sel) {
-                if (d_any_modifier || d_consume_select) {
-                    dsel_modified = true;
+                if (dminus_pulse > 0) {
+                    input.button_minus = true;
+                    dminus_pulse--;
                 }
-            } else {
-                if (dsel_prev && !dsel_modified) {
-                    dminus_pulse = 3;
-                }
-                dsel_modified = false;
-            }
-            dsel_prev = sel;
 
-            if (!sel) {
-                dinput_lr_pending = 0;
-                dinput_lr_wait_frames = 0;
-            } else {
-                if (trig_l && trig_r) {
+                if (sel) {
+                    if (d_any_modifier || d_consume_select) {
+                        dsel_modified = true;
+                    }
+                } else {
+                    if (dsel_prev && !dsel_modified) {
+                        dminus_pulse = 3;
+                    }
+                    dsel_modified = false;
+                }
+                dsel_prev = sel;
+
+                if (!sel) {
                     dinput_lr_pending = 0;
                     dinput_lr_wait_frames = 0;
-                } else if (trig_l ^ trig_r) {
-                    uint8_t side = trig_l ? 1 : 2;
-                    if (dinput_lr_pending != side) {
-                        dinput_lr_pending = side;
+                } else {
+                    if (trig_l && trig_r) {
+                        dinput_lr_pending = 0;
+                        dinput_lr_wait_frames = 0;
+                    } else if (trig_l ^ trig_r) {
+                        uint8_t side = trig_l ? 1 : 2;
+                        if (dinput_lr_pending != side) {
+                            dinput_lr_pending = side;
+                            dinput_lr_wait_frames = 0;
+                        }
+                        if (dinput_lr_wait_frames < 255) dinput_lr_wait_frames++;
+                    } else {
+                        dinput_lr_pending = 0;
                         dinput_lr_wait_frames = 0;
                     }
-                    if (dinput_lr_wait_frames < 255) dinput_lr_wait_frames++;
-                } else {
-                    dinput_lr_pending = 0;
-                    dinput_lr_wait_frames = 0;
+                }
+
+                if (sel && dinput_lr_pending != 0) {
+                    input.button_minus = false;
+
+                    if (dinput_lr_pending == 1) {
+                        input.trigger_l = false;
+                    } else if (dinput_lr_pending == 2) {
+                        input.trigger_r = false;
+                    }
+                }
+
+                if (sel &&
+                    dinput_lr_pending == 1 &&
+                    dinput_lr_wait_frames >= DINPUT_LR_GRACE_FRAMES &&
+                    trig_l && !trig_r) {
+                    input.trigger_zl   = true;
+                    input.button_minus = false;
+                    input.trigger_l    = false;
+                }
+                else if (sel &&
+                         dinput_lr_pending == 2 &&
+                         dinput_lr_wait_frames >= DINPUT_LR_GRACE_FRAMES &&
+                         trig_r && !trig_l) {
+                    input.trigger_zr   = true;
+                    input.button_minus = false;
+                    input.trigger_r    = false;
                 }
             }
-
-            if (sel && dinput_lr_pending != 0) {
-                input.button_minus = false;
-
-                if (dinput_lr_pending == 1) {
-                    input.trigger_l = false;
-                } else if (dinput_lr_pending == 2) {
-                    input.trigger_r = false;
-                }
-            }
-
-            if (sel &&
-                dinput_lr_pending == 1 &&
-                dinput_lr_wait_frames >= DINPUT_LR_GRACE_FRAMES &&
-                trig_l && !trig_r) {
-                input.trigger_zl   = true;
-                input.button_minus = false;
-                input.trigger_l    = false;
-            }
-            else if (sel &&
-                     dinput_lr_pending == 2 &&
-                     dinput_lr_wait_frames >= DINPUT_LR_GRACE_FRAMES &&
-                     trig_r && !trig_l) {
-                input.trigger_zr   = true;
-                input.button_minus = false;
-                input.trigger_r    = false;
+            else {
+                // DINPUT_BR:
+                // normal held Select handled in the base mapping above.
             }
         }
 

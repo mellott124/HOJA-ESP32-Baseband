@@ -495,19 +495,27 @@ void dinput_bt_sendinput(i2cinput_input_s *input)
     //   bit 10 = Select
     //   bit 11 = Start
     //
+    // Duplicate BlueRetro Mappings
+    // bit 6  and bit 8   → L
+    // bit 7  and bit 9   → R
+    // bit 11 and bit 12  → Start
+    // bit 10 and bit 15  → Select
+    //
     // This split avoids BR B-button contamination while preserving
     // VBGO/Quest-specific X/Y behavior.
     // ----------------------------------------------------------------------
     enum {
-        D_SLOT_A      = 0,
-        D_SLOT_B_VBGO = 1,
-        D_SLOT_B_BR   = 3,
-        D_SLOT_X_VBGO = 3,
-        D_SLOT_Y_VBGO = 4,
-        D_SLOT_L      = 6,
-        D_SLOT_R      = 7,
-        D_SLOT_SELECT = 10,
-        D_SLOT_START  = 11,
+        D_SLOT_A          = 0,
+        D_SLOT_B_VBGO     = 1,
+        D_SLOT_B_BR       = 3,
+        D_SLOT_X_VBGO     = 3,
+        D_SLOT_Y_VBGO     = 4,
+        D_SLOT_L          = 6,
+        D_SLOT_R          = 7,
+        D_SLOT_SELECT     = 10,
+        D_SLOT_SELECT_DUP = 15,
+		D_SLOT_START      = 11,
+		D_SLOT_START_DUP  = 12,
     };
 
     uint16_t b = 0;
