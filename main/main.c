@@ -84,7 +84,7 @@ static void select_boot_mode_from_right_dpad(void)
     } else if (c_right_pressed) {
         current_mode = INPUT_MODE_NES;     // NES Profile. Switch Pro Controller
     } else if (c_down_pressed) {
-        current_mode = INPUT_MODE_DINPUT;  // DInput Controller for PC
+        current_mode = INPUT_MODE_DINPUT;  // DInput Controller for PC and BlueRetro
     } else {
         current_mode = current_mode;     // default.  Use the global above.
     }
@@ -243,7 +243,7 @@ static void controller_task(void* arg)
         // =====================================================
         // SYNC combo — L + R + C-Down
         //   < 5000 ms : no-op
-        //   >= 5000 ms: mode-specific re-pair / change host (destructive)
+        //   >= 3000 ms: mode-specific re-pair / change host (destructive)
         // =====================================================
         static bool   combo_active = false;
         static int64_t combo_start_us = 0;
@@ -269,7 +269,6 @@ static void controller_task(void* arg)
         if (combo_now && combo_active) {
             int64_t held_ms = (now_us - combo_start_us) / 1000;
 
-            // Long hold: factory reset after >= 3000 ms (destructive)
             if (combo_reset_armed && !combo_reset_fired && held_ms >= 3000) {
                 combo_reset_fired = true;
                 combo_reset_armed = false;
@@ -288,7 +287,6 @@ static void controller_task(void* arg)
                         memset(global_loaded_settings.paired_host_dinput_mac, 0, 6);
                         global_loaded_settings.has_paired_dinput = false;
 
-                        // ALSO RESET THE DEVICE’S OWN DINPUT MAC
                         memset(global_loaded_settings.device_mac_dinput, 0, 6);
                         ESP_LOGW(TAG, "Cleared device_mac_dinput");
 
@@ -309,10 +307,8 @@ static void controller_task(void* arg)
                         break;
                 }
 
-                // Save updated pairing state
                 app_settings_save();
 
-                // Visual feedback + restart
                 esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
                 led_set_state(LED_PAIRING);
                 vTaskDelay(pdMS_TO_TICKS(250));
@@ -322,8 +318,6 @@ static void controller_task(void* arg)
 
         if (!combo_now && combo_active) {
             combo_active = false;
-            // < 5000 ms: intentionally no-op (no LED, no pairing)
-            //ESP_LOGI(TAG, "SYNC combo released after %lld ms", (now_us - combo_start_us) / 1000);
         }
 
         // =====================================================
@@ -331,308 +325,251 @@ static void controller_task(void* arg)
         // =====================================================
         switch (get_current_mode())
         {
-            case INPUT_MODE_SWPRO: //Switch 1/2 and BlueRetro works
-                //Used RED ALARM in NSO VB to map these out to correctly fit the VB controller.
-				//Wario seems to play fine also.
-                //Left Dpad
-                input.dpad_up       = !gpio_get_level(GPIO_BTN_DPAD_U); // D-pad   →Up
-                input.dpad_down     = !gpio_get_level(GPIO_BTN_DPAD_D); // D-pad   →Down
-                input.dpad_left     = !gpio_get_level(GPIO_BTN_DPAD_L); // D-pad   →Left
-                input.dpad_right    = !gpio_get_level(GPIO_BTN_DPAD_R); // D-pad   →Right
+            case INPUT_MODE_SWPRO:
+                input.dpad_up       = !gpio_get_level(GPIO_BTN_DPAD_U);
+                input.dpad_down     = !gpio_get_level(GPIO_BTN_DPAD_D);
+                input.dpad_left     = !gpio_get_level(GPIO_BTN_DPAD_L);
+                input.dpad_right    = !gpio_get_level(GPIO_BTN_DPAD_R);
 
-                //Left Analog Stick
-                input.lx            = 2048;   // Default center
-                input.ly            = 2048;   // Default center
+                input.lx            = 2048;
+                input.ly            = 2048;
 
-                //Right Dpad via Right analog stick
-                input.rx            = 2048;    // Default center
-                input.ry            = 2048;    // Default center
-                // VB right D-pad (C-pad) → right analog stick
-                if (!gpio_get_level(GPIO_BTN_C_R)) input.rx = 4095;     // right
-                else if (!gpio_get_level(GPIO_BTN_C_L)) input.rx = 0;   // left
-                if (!gpio_get_level(GPIO_BTN_C_U)) input.ry = 4095;     // up
-                else if (!gpio_get_level(GPIO_BTN_C_D)) input.ry = 0;   // down
+                input.rx            = 2048;
+                input.ry            = 2048;
+                if (!gpio_get_level(GPIO_BTN_C_R)) input.rx = 4095;
+                else if (!gpio_get_level(GPIO_BTN_C_L)) input.rx = 0;
+                if (!gpio_get_level(GPIO_BTN_C_U)) input.ry = 4095;
+                else if (!gpio_get_level(GPIO_BTN_C_D)) input.ry = 0;
 
-                //Select/Start
-                input.button_plus   = !gpio_get_level(GPIO_BTN_START);   // Start → Plus (+)
-                input.button_minus  = false;                             // handled in combo section
+                input.button_plus   = !gpio_get_level(GPIO_BTN_START);
+                input.button_minus  = false; // handled below
 
-                //A and B buttons
-                input.button_east   = !gpio_get_level(GPIO_BTN_A);       // A
-                input.button_south  = !gpio_get_level(GPIO_BTN_B);       // B
+                input.button_east   = !gpio_get_level(GPIO_BTN_A);
+                input.button_south  = !gpio_get_level(GPIO_BTN_B);
 
-                //Triggers
-                input.trigger_l     = !gpio_get_level(GPIO_BTN_L);      // L
-                input.trigger_r     = !gpio_get_level(GPIO_BTN_R);      // R
+                input.trigger_l     = !gpio_get_level(GPIO_BTN_L);
+                input.trigger_r     = !gpio_get_level(GPIO_BTN_R);
 
-                //Analog stick button clicks
                 input.button_stick_left  = false;
-                input.button_stick_right = false; // generated by combo when needed (IPD)
-
-                //Capture and Home handled below as combo buttons
+                input.button_stick_right = false;
+                input.button_home        = false;
+                input.button_capture     = false;
+                input.trigger_zl         = false;
+                input.trigger_zr         = false;
+                input.button_north       = false;
+                input.button_west        = false;
                 break;
 
             case INPUT_MODE_SNES:
-                input.button_east   = !gpio_get_level(GPIO_BTN_C_R);    // C-Right → A
-                input.button_south  = !gpio_get_level(GPIO_BTN_C_D);    // C-Down  → B
-                input.button_west   = !gpio_get_level(GPIO_BTN_C_L);    // C-Left  → Y
-                input.button_north  = !gpio_get_level(GPIO_BTN_C_U);    // C-Up    → X
-                input.dpad_up      = !gpio_get_level(GPIO_BTN_DPAD_U);  // D-pad   →Up
-                input.dpad_down    = !gpio_get_level(GPIO_BTN_DPAD_D);  // D-pad   →Down
-                input.dpad_left    = !gpio_get_level(GPIO_BTN_DPAD_L);  // D-pad   →Left
-                input.dpad_right   = !gpio_get_level(GPIO_BTN_DPAD_R);  // D-pad   →Right
-                input.trigger_l    = !gpio_get_level(GPIO_BTN_L);       // L
-                input.trigger_r    = !gpio_get_level(GPIO_BTN_R);       // R
-                input.trigger_zl   = !gpio_get_level(GPIO_BTN_B);       // Optional: ZL = VB B
-                input.trigger_zr   = !gpio_get_level(GPIO_BTN_A);       // Optional: ZR = VB A
-                input.button_plus  = !gpio_get_level(GPIO_BTN_START);   // Start → Plus
-                input.button_minus = !gpio_get_level(GPIO_BTN_SELECT);  // Select → Minus
+                input.button_east   = !gpio_get_level(GPIO_BTN_C_R);
+                input.button_south  = !gpio_get_level(GPIO_BTN_C_D);
+                input.button_west   = !gpio_get_level(GPIO_BTN_C_L);
+                input.button_north  = !gpio_get_level(GPIO_BTN_C_U);
+                input.dpad_up       = !gpio_get_level(GPIO_BTN_DPAD_U);
+                input.dpad_down     = !gpio_get_level(GPIO_BTN_DPAD_D);
+                input.dpad_left     = !gpio_get_level(GPIO_BTN_DPAD_L);
+                input.dpad_right    = !gpio_get_level(GPIO_BTN_DPAD_R);
+                input.trigger_l     = !gpio_get_level(GPIO_BTN_L);
+                input.trigger_r     = !gpio_get_level(GPIO_BTN_R);
+                input.trigger_zl    = !gpio_get_level(GPIO_BTN_B);
+                input.trigger_zr    = !gpio_get_level(GPIO_BTN_A);
+                input.button_plus   = !gpio_get_level(GPIO_BTN_START);
+                input.button_minus  = !gpio_get_level(GPIO_BTN_SELECT);
                 input.lx = 2048; input.ly = 2048;
                 input.rx = 2048; input.ry = 2048;
                 break;
 
             case INPUT_MODE_NES:
-                input.button_east  = !gpio_get_level(GPIO_BTN_A);        // A
-                input.button_south = !gpio_get_level(GPIO_BTN_B);        // B
-                input.dpad_up      = !gpio_get_level(GPIO_BTN_DPAD_U);   // Up
-                input.dpad_down    = !gpio_get_level(GPIO_BTN_DPAD_D);   // Down
-                input.dpad_left    = !gpio_get_level(GPIO_BTN_DPAD_L);   // Left
-                input.dpad_right   = !gpio_get_level(GPIO_BTN_DPAD_R);   // Right
-                input.trigger_l    = !gpio_get_level(GPIO_BTN_L);        // L
-                input.trigger_r    = !gpio_get_level(GPIO_BTN_R);        // R
-                input.trigger_zl   = false;
-                input.trigger_zr   = false;
-                input.button_plus  = !gpio_get_level(GPIO_BTN_START);    // Start → Plus
-                input.button_minus = !gpio_get_level(GPIO_BTN_SELECT);   // Select → Minus
+                input.button_east   = !gpio_get_level(GPIO_BTN_A);
+                input.button_south  = !gpio_get_level(GPIO_BTN_B);
+                input.dpad_up       = !gpio_get_level(GPIO_BTN_DPAD_U);
+                input.dpad_down     = !gpio_get_level(GPIO_BTN_DPAD_D);
+                input.dpad_left     = !gpio_get_level(GPIO_BTN_DPAD_L);
+                input.dpad_right    = !gpio_get_level(GPIO_BTN_DPAD_R);
+                input.trigger_l     = !gpio_get_level(GPIO_BTN_L);
+                input.trigger_r     = !gpio_get_level(GPIO_BTN_R);
+                input.trigger_zl    = false;
+                input.trigger_zr    = false;
+                input.button_plus   = !gpio_get_level(GPIO_BTN_START);
+                input.button_minus  = !gpio_get_level(GPIO_BTN_SELECT);
                 input.lx = 2048; input.ly = 2048;
                 input.rx = 2048; input.ry = 2048;
                 break;
 
-            case INPUT_MODE_DINPUT: //Mednafen on PC works
-				//Alt + Shift + 1 to setup Mednafen controller mapping
-                input.button_east  = !gpio_get_level(GPIO_BTN_A);
-                input.button_south = !gpio_get_level(GPIO_BTN_B);
-                input.button_west  = !gpio_get_level(GPIO_BTN_C_L);
-                input.button_north = !gpio_get_level(GPIO_BTN_C_U);
-                // Dpad → dpad bits
-                input.dpad_up      = !gpio_get_level(GPIO_BTN_DPAD_U);
-                input.dpad_down    = !gpio_get_level(GPIO_BTN_DPAD_D);
-                input.dpad_left    = !gpio_get_level(GPIO_BTN_DPAD_L);
-                input.dpad_right   = !gpio_get_level(GPIO_BTN_DPAD_R);
-                // Triggers → analog
-                input.lt           = !gpio_get_level(GPIO_BTN_L) ? 0xFF : 0x00;
-                input.rt           = !gpio_get_level(GPIO_BTN_R) ? 0xFF : 0x00;
-                // Map VB right dpad → right stick
-                input.rx           = !gpio_get_level(GPIO_BTN_C_R) ? 0xFFFF : 0x7FFF;
-                input.ry           = !gpio_get_level(GPIO_BTN_C_D) ? 0x0000 : 0x7FFF;
-                input.button_plus  = !gpio_get_level(GPIO_BTN_START);
-                input.button_minus = !gpio_get_level(GPIO_BTN_SELECT);
-                // Optional: emulate LB/RB via triggers or dedicated
-                input.trigger_l    = !gpio_get_level(GPIO_BTN_L);
-                input.trigger_r    = !gpio_get_level(GPIO_BTN_R);
-                input.trigger_zl   = false;
-                input.trigger_zr   = false;
+            case INPUT_MODE_DINPUT:
+                input.button_east   = !gpio_get_level(GPIO_BTN_A);
+                input.button_south  = !gpio_get_level(GPIO_BTN_B);
+                input.button_west   = !gpio_get_level(GPIO_BTN_C_L);
+                input.button_north  = !gpio_get_level(GPIO_BTN_C_U);
+
+                input.dpad_up       = !gpio_get_level(GPIO_BTN_DPAD_U);
+                input.dpad_down     = !gpio_get_level(GPIO_BTN_DPAD_D);
+                input.dpad_left     = !gpio_get_level(GPIO_BTN_DPAD_L);
+                input.dpad_right    = !gpio_get_level(GPIO_BTN_DPAD_R);
+
+                input.lt            = !gpio_get_level(GPIO_BTN_L) ? 0xFF : 0x00;
+                input.rt            = !gpio_get_level(GPIO_BTN_R) ? 0xFF : 0x00;
+
+                input.rx            = !gpio_get_level(GPIO_BTN_C_R) ? 0xFFFF : 0x7FFF;
+                input.ry            = !gpio_get_level(GPIO_BTN_C_D) ? 0x0000 : 0x7FFF;
+
+                input.button_plus   = !gpio_get_level(GPIO_BTN_START);
+                input.button_minus  = !gpio_get_level(GPIO_BTN_SELECT); // immediate select
+                input.trigger_l     = !gpio_get_level(GPIO_BTN_L);
+                input.trigger_r     = !gpio_get_level(GPIO_BTN_R);
+                input.trigger_zl    = false; // synthetic X
+                input.trigger_zr    = false; // synthetic Y
                 break;
 
             case INPUT_MODE_N64:
             default:
-                input.button_east        = !gpio_get_level(GPIO_BTN_A);        // A
-                input.button_south       = !gpio_get_level(GPIO_BTN_B);        // B
-                input.dpad_up            = !gpio_get_level(GPIO_BTN_DPAD_U);   // Left D-pad Up
-                input.dpad_down          = !gpio_get_level(GPIO_BTN_DPAD_D);   // Left D-pad Down
-                input.dpad_left          = !gpio_get_level(GPIO_BTN_DPAD_L);   // Left D-pad Left
-                input.dpad_right         = !gpio_get_level(GPIO_BTN_DPAD_R);   // Left D-pad Right
-                input.button_north       = !gpio_get_level(GPIO_BTN_C_L);	   // C-Left  → Y. D-pad in N64 mode.
-                input.button_west        = !gpio_get_level(GPIO_BTN_C_U);	   // C-Up    → X. D-pad in N64 mode.	
-                input.button_minus       = !gpio_get_level(GPIO_BTN_C_R);      // C-Right → A. D-pad in N64 mode.
-                input.trigger_zr         = !gpio_get_level(GPIO_BTN_C_D);      // C-Down  → B. D-pad in N64 mode.
-                input.trigger_l          = !gpio_get_level(GPIO_BTN_L);        // Trigger Left
-                input.trigger_r          = !gpio_get_level(GPIO_BTN_R);        // Trigger Right
-                input.button_plus        = !gpio_get_level(GPIO_BTN_START);    // Start → Plus
-                input.trigger_zl         = false;   // Confirmed triggers ZL on Switch in N64 mode when set true elsewhere
-                input.button_stick_left  = false;   // Confirmed triggers ZR on Switch in N64 mode when set true elsewhere
-                input.button_stick_right = false;   // Appears ignored on Switch in N64 mode
+                input.button_east        = !gpio_get_level(GPIO_BTN_A);
+                input.button_south       = !gpio_get_level(GPIO_BTN_B);
+                input.dpad_up            = !gpio_get_level(GPIO_BTN_DPAD_U);
+                input.dpad_down          = !gpio_get_level(GPIO_BTN_DPAD_D);
+                input.dpad_left          = !gpio_get_level(GPIO_BTN_DPAD_L);
+                input.dpad_right         = !gpio_get_level(GPIO_BTN_DPAD_R);
+                input.button_north       = !gpio_get_level(GPIO_BTN_C_L);
+                input.button_west        = !gpio_get_level(GPIO_BTN_C_U);
+                input.button_minus       = !gpio_get_level(GPIO_BTN_C_R);
+                input.trigger_zr         = !gpio_get_level(GPIO_BTN_C_D);
+                input.trigger_l          = !gpio_get_level(GPIO_BTN_L);
+                input.trigger_r          = !gpio_get_level(GPIO_BTN_R);
+                input.button_plus        = !gpio_get_level(GPIO_BTN_START);
+                input.trigger_zl         = false;
+                input.button_stick_left  = false;
+                input.button_stick_right = false;
                 input.lx = 2048; input.ly = 2048;
                 input.rx = 2048; input.ry = 2048;
                 break;
         }
 
         // =====================================================
-        // SELECT / MODIFIER COMBOS (HOME / CAPTURE / ZL+ZR / X / R3)
-        // SWPRO Minus behavior: tap-on-release (stable)
-        //   - No tap time limit: any Select press+release with no modifiers => Minus
-        //   - Minus is pulsed for a few frames to ensure host observes it
+        // SIMPLE COMBOS
         // =====================================================
         bool sel    = !gpio_get_level(GPIO_BTN_SELECT);
         bool trig_l = !gpio_get_level(GPIO_BTN_L);
         bool trig_r = !gpio_get_level(GPIO_BTN_R);
-        bool c_u    = !gpio_get_level(GPIO_BTN_C_U);  
-		bool c_l    = !gpio_get_level(GPIO_BTN_C_L);  
+        bool c_u    = !gpio_get_level(GPIO_BTN_C_U);
+        bool c_l    = !gpio_get_level(GPIO_BTN_C_L);
         bool c_d    = !gpio_get_level(GPIO_BTN_C_D);
 
-        bool mode_swpro = (get_current_mode() == INPUT_MODE_SWPRO);
-        bool mode_n64   = (get_current_mode() == INPUT_MODE_N64);
-		//bool mode_dinput= (get_current_mode() == INPUT_MODE_DINPUT);
+        bool mode_swpro  = (get_current_mode() == INPUT_MODE_SWPRO);
+        bool mode_n64    = (get_current_mode() == INPUT_MODE_N64);
+        bool mode_dinput = (get_current_mode() == INPUT_MODE_DINPUT);
 
-        // Track whether we matched a Select combo this frame.
-        bool consume_select = false;
-
-        // -----------------------------------------------------
-        // Switch Combo priority (most specific first)
-        // -----------------------------------------------------
-        if (mode_swpro && sel && trig_l && trig_r) {
-            consume_select = true;
-        }
-        else if (mode_swpro && sel && c_u) {
-            consume_select = true;
-        }
-		else if (mode_swpro && sel && c_l) {
-            consume_select = true;
-        }
-        else if (mode_swpro && sel && c_d) {
-            consume_select = true;
-        }
-        else if (mode_swpro && sel && trig_l && !trig_r) {
-            consume_select = true;
-        }
-        else if (mode_swpro && sel && trig_r && !trig_l) {
-            consume_select = true;
-        }
-        else if (!mode_swpro && mode_n64 && sel && trig_l && trig_r) {
-            consume_select = true;
-        }
-        else if (!mode_swpro && mode_n64 && sel) {
-            consume_select = true;
-        }
-
-        // -----------------------------------------------------
-        // SWPRO: Select -> Minus as a tap on release
-        // - Any modifier/combo during the hold cancels Minus
-        // - Minus emitted as a short multi-frame pulse
-        // -----------------------------------------------------
+        // --- SWPRO: keep your existing behavior ---
         if (mode_swpro) {
             static bool    sel_prev = false;
             static bool    sel_modified = false;
             static uint8_t minus_pulse = 0;
 
+            static uint8_t swpro_lr_pending = 0;
+            static uint8_t swpro_lr_wait_frames = 0;
+            const uint8_t SWPRO_LR_GRACE_FRAMES = 6;
+
+            bool consume_select = false;
+            if (sel && trig_l && trig_r) consume_select = true;
+            else if (sel && c_u)         consume_select = true;
+            else if (sel && c_l)         consume_select = true;
+            else if (sel && c_d)         consume_select = true;
+            else if (sel && trig_l && !trig_r) consume_select = true;
+            else if (sel && trig_r && !trig_l) consume_select = true;
+
             bool any_modifier = trig_l || trig_r || c_u || c_l || c_d;
 
-            // If a pulse is active, assert Minus for a few frames
             if (minus_pulse > 0) {
                 input.button_minus = true;
                 minus_pulse--;
             }
 
             if (sel) {
-                // Select held: if it ever looks like a modifier/combo, cancel this press as Minus
                 if (any_modifier || consume_select) {
                     sel_modified = true;
                 }
             } else {
-                // Select released
-                if (sel_prev) {
-                    // If Select was a clean press (never modified), emit Minus pulse
-                    if (!sel_modified) {
-                        minus_pulse = 3; // 2 frames ≈ 16ms @ 8ms/frame (set 3 if you still see misses)
-                    }
+                if (sel_prev && !sel_modified) {
+                    minus_pulse = 3;
                 }
                 sel_modified = false;
             }
-
             sel_prev = sel;
-        }
 
-        // -----------------------------------------------------
-        // Clear ONLY what this combo block can generate,
-        // and ONLY in the modes where we generate it.
-        // -----------------------------------------------------
-        input.button_home    = false;
-        input.button_capture = false;
-
-        if (mode_swpro) {
-            input.trigger_zl         = false;
-            input.trigger_zr         = false;
-            input.button_stick_right = false;  // R3
-            input.button_north       = false;  // X
-			input.button_west        = false;  // Y
-        }
-
-        if (mode_n64) {
-            input.trigger_zl        = false;
-            input.button_stick_left = false;
-            // Do NOT clear trigger_zr here (N64 base mapping uses it)
-            // Do NOT clear button_north here (N64 base mapping uses it)
-        }
-
-        // -----------------------------------------------------
-        // SWPRO: grace window to prevent HOME/CAPTURE stealing Select+L+R
-        // -----------------------------------------------------
-        static uint8_t swpro_lr_pending = 0;     // 0 = none, 1 = L pending, 2 = R pending
-        static uint8_t swpro_lr_wait_frames = 0; // frames since pending started
-        const uint8_t SWPRO_LR_GRACE_FRAMES = 6; // ~48ms @ 8ms/frame
-
-        if (!mode_swpro || !sel) {
-            swpro_lr_pending = 0;
-            swpro_lr_wait_frames = 0;
-        } else {
-            if (trig_l && trig_r) {
-                // L+R combo takes precedence; clear pending state
+            if (!sel) {
                 swpro_lr_pending = 0;
                 swpro_lr_wait_frames = 0;
-            } else if (trig_l ^ trig_r) {
-                uint8_t side = trig_l ? 1 : 2;
-
-                if (swpro_lr_pending != side) {
-                    // Start (or restart) pending when side changes
-                    swpro_lr_pending = side;
+            } else {
+                if (trig_l && trig_r) {
+                    swpro_lr_pending = 0;
+                    swpro_lr_wait_frames = 0;
+                } else if (trig_l ^ trig_r) {
+                    uint8_t side = trig_l ? 1 : 2;
+                    if (swpro_lr_pending != side) {
+                        swpro_lr_pending = side;
+                        swpro_lr_wait_frames = 0;
+                    }
+                    if (swpro_lr_wait_frames < 255) swpro_lr_wait_frames++;
+                } else {
+                    swpro_lr_pending = 0;
                     swpro_lr_wait_frames = 0;
                 }
+            }
 
-                if (swpro_lr_wait_frames < 255) swpro_lr_wait_frames++;
-            } else {
-                // No triggers held
-                swpro_lr_pending = 0;
-                swpro_lr_wait_frames = 0;
+            if (sel && trig_l && trig_r) {
+                input.trigger_zl = true;
+                input.trigger_zr = true;
+            }
+            else if (sel && c_u) {
+                input.button_north = true;
+                input.rx = 2048; input.ry = 2048;
+            }
+            else if (sel && c_l) {
+                input.button_west = true;
+                input.rx = 2048; input.ry = 2048;
+            }
+            else if (sel && c_d) {
+                input.button_stick_right = true;
+                input.rx = 2048; input.ry = 2048;
+            }
+            else if (sel &&
+                     swpro_lr_pending == 1 &&
+                     swpro_lr_wait_frames >= SWPRO_LR_GRACE_FRAMES &&
+                     trig_l && !trig_r) {
+                input.button_home = true;
+            }
+            else if (sel &&
+                     swpro_lr_pending == 2 &&
+                     swpro_lr_wait_frames >= SWPRO_LR_GRACE_FRAMES &&
+                     trig_r && !trig_l) {
+                input.button_capture = true;
             }
         }
 
-        // --- SWPRO combos (immediate) ---
-        if (mode_swpro && sel && trig_l && trig_r) {
-            input.trigger_zl = true;
-            input.trigger_zr = true;
+        // --- N64: keep your existing behavior ---
+        if (mode_n64) {
+            if (sel && trig_l && trig_r) {
+                input.button_stick_left = true;
+                input.trigger_zl        = true;
+            }
+            else if (sel) {
+                input.trigger_zl = true;
+            }
         }
-        else if (mode_swpro && sel && c_u) {
-            input.button_north = true;          // X
-            input.rx = 2048; input.ry = 2048;
-        }
-		else if (mode_swpro && sel && c_l) {
-            input.button_west = true;           // Y
-            input.rx = 2048; input.ry = 2048;
-        }
-        else if (mode_swpro && sel && c_d) {
-            input.button_stick_right = true;    // R3
-            input.rx = 2048; input.ry = 2048;
-        }
-        // --- SWPRO: guarded HOME/CAPTURE (after grace window) ---
-        else if (mode_swpro && sel &&
-                 swpro_lr_pending == 1 &&
-                 swpro_lr_wait_frames >= SWPRO_LR_GRACE_FRAMES &&
-                 trig_l && !trig_r) {
-            input.button_home = true;
-        }
-        else if (mode_swpro && sel &&
-                 swpro_lr_pending == 2 &&
-                 swpro_lr_wait_frames >= SWPRO_LR_GRACE_FRAMES &&
-                 trig_r && !trig_l) {
-            input.button_capture = true;
-        }
-        // --- N64 combos ---
-        else if (!mode_swpro && mode_n64 && sel && trig_l && trig_r) {
-            input.button_stick_left = true;
-            input.trigger_zl        = true;
-        }
-        else if (!mode_swpro && mode_n64 && sel) {
-            input.trigger_zl = true;
+
+        // --- DINPUT: basic direct held combos ---
+        if (mode_dinput) {
+            if (sel && trig_l && !trig_r) {
+                input.trigger_zl   = true;   // X
+                input.button_minus = false;  // suppress Select
+                input.trigger_l    = false;  // suppress L
+                input.lt           = 0x00;   // suppress LT
+            }
+            else if (sel && trig_r && !trig_l) {
+                input.trigger_zr   = true;   // Y
+                input.button_minus = false;  // suppress Select
+                input.trigger_r    = false;  // suppress R
+                input.rt           = 0x00;   // suppress RT
+            }
         }
 
         // =====================================================

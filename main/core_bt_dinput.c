@@ -458,7 +458,7 @@ void _dinput_bt_task(void *parameters)
 //
 // Instead, we derive meaning only from:
 //   1. Real debug logs that show which HOJA bit fires for each VB button
-//   2. Explicit comparisons (e.g., input->rx == 65535) instead of boolean tests
+//   2. Explicit comparisons (e.g., input->rx == 0xFFFF) instead of boolean tests
 //
 // This prevents:
 //   - Wrong direction detection
@@ -475,67 +475,92 @@ void dinput_bt_sendinput(i2cinput_input_s *input)
 {
     if (!input) return;
 
-    debug_print_input_changes(input);
+    //debug_print_input_changes(input);
 
     // VB semantic buttons (derived from HOJA fields for DInput mode)
-    bool vb_a      = !!input->button_east;
-    bool vb_b      = !!input->button_south;
-    bool vb_l      = !!input->trigger_l;
-    bool vb_r      = !!input->trigger_r;
-    bool vb_start  = !!input->button_plus;
-    bool vb_select = !!input->button_minus;
+    bool vb_a      = input->button_east;
+    bool vb_b      = input->button_south;
+    bool vb_l      = input->trigger_l;
+    bool vb_r      = input->trigger_r;
+    bool vb_start  = input->button_plus;
+    bool vb_select = input->button_minus;
+
+    //Synthetic DInput-only semantic buttons generated upstream in controller_task()
+    bool vbgo_x    = input->trigger_zl;  // Select + L combo
+    bool vbgo_y    = input->trigger_zr;  // Select + R combo 
+
 
     // VB left d-pad
-    bool vb_left_up    = !!input->dpad_up;
-    bool vb_left_down  = !!input->dpad_down;
-    bool vb_left_left  = !!input->dpad_left;
-    bool vb_left_right = !!input->dpad_right;
+    bool vb_left_up    = input->dpad_up;
+    bool vb_left_down  = input->dpad_down;
+    bool vb_left_left  = input->dpad_left;
+    bool vb_left_right = input->dpad_right;
 
     // VB right d-pad
-    bool vb_right_up    = !!input->button_north;
-    bool vb_right_left  = !!input->button_west;
-    bool vb_right_right = (input->rx == 65535);
-    bool vb_right_down  = (input->ry == 0);
+    bool vb_right_up    = input->button_north;
+    bool vb_right_left  = input->button_west;
+    bool vb_right_right = (input->rx == 0xFFFF);
+    bool vb_right_down  = (input->ry == 0x0000);
 
     // BlueRetro VB default mapping discovered empirically
-	//
-	// Primary slots
-	// bit 0  = A
-	// bit 3  = B
-	// bit 6  = L
-	// bit 7  = R
-	// bit 10 = Select
-	// bit 11 = Start
-	//
-	// Duplicate slots
-	// bit 8  = L
-	// bit 9  = R
-	// bit 12 = Start
-	// bit 15 = Select
-	//
-	// Unknown / unused
-	// bit 1
-	// bit 2
-	// bit 4
-	// bit 5
-	// bit 13
-	// bit 14
+    //
+    // Primary slots
+    // bit 0  = A
+    // bit 3  = B
+    // bit 6  = L
+    // bit 7  = R
+    // bit 10 = Select
+    // bit 11 = Start
+    //
+    // Duplicate / synthetic slots
+    // bit 1  = B      // added for Meta Quest / VBGo compatibility
+    // bit 3  = VBGo X // synthetic combo from controller_task() via trigger_zl
+    // bit 4  = VBGo Y // synthetic combo from controller_task() via trigger_zr
+    // bit 8  = L
+    // bit 9  = R
+    // bit 12 = Start
+    // bit 15 = Select
+    //
+    // Unknown / unused
+    // bit 5
+    // bit 13
+    // bit 14
     enum {
-		BR_SLOT_SELECT = 10, //confirmed!
-        BR_SLOT_START  = 11, //confirmed!  //Bit 12 triggers same behavior
-        BR_SLOT_A      = 0, //confirmed!
-		BR_SLOT_B      = 3, //confirmed!
-        BR_SLOT_L      = 6, //confirmed!
-        BR_SLOT_R      = 7, //confirmed! //bit 9 triggers same behavior
+        BR_SLOT_SELECT = 10, // confirmed!
+        BR_SLOT_START  = 11, // confirmed! // bit 12 triggers same behavior
+        BR_SLOT_A      = 0,  // confirmed!
+        BR_SLOT_B      = 3,  // confirmed!
+        BR_SLOT_B_DUP  = 1,  // added for Quest/VBGo
+        BR_SLOT_VBGO_X = 3,  // synthetic X uses bit 3 only
+        BR_SLOT_VBGO_Y = 4,  // synthetic Y uses bit 4
+        BR_SLOT_L      = 6,  // confirmed!
+        BR_SLOT_R      = 7,  // confirmed! // bit 9 triggers same behavior
     };
 
     uint16_t b = 0;
-	b |= vb_select << BR_SLOT_SELECT;
-	b |= vb_start  << BR_SLOT_START;
+
+    b |= vb_select << BR_SLOT_SELECT;
+    b |= vb_start  << BR_SLOT_START;
     b |= vb_a      << BR_SLOT_A;
-	b |= vb_b      << BR_SLOT_B;
     b |= vb_l      << BR_SLOT_L;
     b |= vb_r      << BR_SLOT_R;
+
+    // Normal B path: duplicate on bits 3 and 1
+    if (vb_b) {
+        b |= (1U << BR_SLOT_B);
+        b |= (1U << BR_SLOT_B_DUP);
+    }
+
+    // Synthetic VBGo X/Y come from controller_task()
+    // X intentionally uses bit 3 ONLY, without bit 1
+    if (vbgo_x) {
+        b &= ~(1U << BR_SLOT_B_DUP);
+        b |=  (1U << BR_SLOT_VBGO_X);
+    }
+
+    if (vbgo_y) {
+        b |= (1U << BR_SLOT_VBGO_Y);
+    }
 
     _dinput_report.buttons = b;
 
