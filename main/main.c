@@ -734,38 +734,20 @@ void app_main(void)
         global_live_data.rgb_body[1] = 0x00;
         global_live_data.rgb_body[2] = 0x00;
 
-        // Button color: white
+        // Button color: gray
         global_live_data.rgb_buttons[0] = 0x80;
         global_live_data.rgb_buttons[1] = 0x80;
         global_live_data.rgb_buttons[2] = 0x80;
 
-        // Left grip: red
+        // Left grip: black
         global_live_data.rgb_gripl[0] = 0x00;
         global_live_data.rgb_gripl[1] = 0x00;
         global_live_data.rgb_gripl[2] = 0x00;
 
-        // Right grip: red
+        // Right grip: black
         global_live_data.rgb_gripr[0] = 0x00;
         global_live_data.rgb_gripr[1] = 0x00;
         global_live_data.rgb_gripr[2] = 0x00;
-
-        ESP_LOGI(TAG, "Switch SPI colors set:"
-                      " body=%02X %02X %02X"
-                      " buttons=%02X %02X %02X"
-                      " gripl=%02X %02X %02X"
-                      " gripr=%02X %02X %02X",
-                 global_live_data.rgb_body[0],
-                 global_live_data.rgb_body[1],
-                 global_live_data.rgb_body[2],
-                 global_live_data.rgb_buttons[0],
-                 global_live_data.rgb_buttons[1],
-                 global_live_data.rgb_buttons[2],
-                 global_live_data.rgb_gripl[0],
-                 global_live_data.rgb_gripl[1],
-                 global_live_data.rgb_gripl[2],
-                 global_live_data.rgb_gripr[0],
-                 global_live_data.rgb_gripr[1],
-                 global_live_data.rgb_gripr[2]);
     }
 
     switch (get_current_mode()) {
