@@ -719,6 +719,54 @@ void app_main(void)
     led_set_state(LED_IDLE);
 
     select_boot_mode_from_right_dpad();
+	
+	//Set colors
+	// ------------------------------------------------------------------
+    // Switch cosmetic color metadata for SPI reads at 0x6050-0x605B
+    // Without this, the Switch may render the controller as black.
+    // ------------------------------------------------------------------
+    if (get_current_mode() == INPUT_MODE_SWPRO ||
+        get_current_mode() == INPUT_MODE_SNES  ||
+        get_current_mode() == INPUT_MODE_N64)
+    {
+        // Body color: red
+        global_live_data.rgb_body[0] = 0xFF;
+        global_live_data.rgb_body[1] = 0x00;
+        global_live_data.rgb_body[2] = 0x00;
+
+        // Button color: white
+        global_live_data.rgb_buttons[0] = 0x80;
+        global_live_data.rgb_buttons[1] = 0x80;
+        global_live_data.rgb_buttons[2] = 0x80;
+
+        // Left grip: red
+        global_live_data.rgb_gripl[0] = 0x00;
+        global_live_data.rgb_gripl[1] = 0x00;
+        global_live_data.rgb_gripl[2] = 0x00;
+
+        // Right grip: red
+        global_live_data.rgb_gripr[0] = 0x00;
+        global_live_data.rgb_gripr[1] = 0x00;
+        global_live_data.rgb_gripr[2] = 0x00;
+
+        ESP_LOGI(TAG, "Switch SPI colors set:"
+                      " body=%02X %02X %02X"
+                      " buttons=%02X %02X %02X"
+                      " gripl=%02X %02X %02X"
+                      " gripr=%02X %02X %02X",
+                 global_live_data.rgb_body[0],
+                 global_live_data.rgb_body[1],
+                 global_live_data.rgb_body[2],
+                 global_live_data.rgb_buttons[0],
+                 global_live_data.rgb_buttons[1],
+                 global_live_data.rgb_buttons[2],
+                 global_live_data.rgb_gripl[0],
+                 global_live_data.rgb_gripl[1],
+                 global_live_data.rgb_gripl[2],
+                 global_live_data.rgb_gripr[0],
+                 global_live_data.rgb_gripr[1],
+                 global_live_data.rgb_gripr[2]);
+    }
 
     switch (get_current_mode()) {
         case INPUT_MODE_SWPRO:       led_set_state(LED_PAIRING);   break;
