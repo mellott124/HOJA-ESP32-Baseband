@@ -44,7 +44,6 @@
  *      - All Switch modes are left unfiltered to ensure consistent rumble behavior.
  *      - Safe to run without haptic hardware connected; driver initialization will skip if not found.
  * ========================================================================================= */
-
 #include "drv2605_esp.h"
 #include "switch_haptics.h"
 
@@ -70,9 +69,8 @@ const float CenterFreqHigh = 320.0f;
 const float CenterFreqLow = 160.0f;
 
 #define HAPTICS_QUEUE_DEPTH              1
-#define HAPTICS_SAMPLE_WINDOW_MS         10
-#define HAPTICS_IDLE_TIMEOUT_MS          20
-#define HAPTICS_MIN_AMPLITUDE_THRESHOLD  0.008f
+#define HAPTICS_IDLE_TIMEOUT_MS          50
+#define HAPTICS_MIN_AMPLITUDE_THRESHOLD  0.001f
 #define HAPTICS_OUTPUT_GAIN              6.0f
 #define HAPTICS_DEFAULT_OD_CLAMP         0x70
 
@@ -84,6 +82,10 @@ static bool _haptics_init = false;
 
 static hoja_rumble_msg_s s_decode_left = {0};
 static hoja_rumble_msg_s s_decode_right = {0};
+static drv2625_test_mode_t s_last_mode_left = DRV2625_TEST_MODE_OL_LRA_160_SINE;
+static drv2625_test_mode_t s_last_mode_right = DRV2625_TEST_MODE_OL_LRA_160_SINE;
+static bool s_mode_valid_left = false;
+static bool s_mode_valid_right = false;
 
 typedef struct
 {
@@ -509,14 +511,47 @@ static int8_t haptics_rtp_from_amplitude(float amplitude)
     return (int8_t)(scaled * 127.0f);
 }
 
+static const hoja_haptic_frame_s *haptics_get_held_sample(const hoja_rumble_msg_s *msg)
+{
+    if ((msg == NULL) || (msg->sample_count == 0))
+    {
+        return NULL;
+    }
+
+    return &msg->samples[msg->sample_count - 1];
+}
+
 static void haptics_apply_sample_to_channel(drv2625_channel_t ch, const hoja_haptic_frame_s *s)
 {
-    float low_amp = s->low_amplitude;
-    float high_amp = s->high_amplitude;
-    float total_amp = low_amp + high_amp;
+    float low_amp;
+    float high_amp;
+    float total_amp;
     float selected_freq;
     drv2625_test_mode_t mode;
     int8_t rtp;
+    drv2625_test_mode_t *last_mode;
+    bool *mode_valid;
+
+    if (ch == DRV2625_CH_LEFT)
+    {
+        last_mode = &s_last_mode_left;
+        mode_valid = &s_mode_valid_left;
+    }
+    else
+    {
+        last_mode = &s_last_mode_right;
+        mode_valid = &s_mode_valid_right;
+    }
+
+    if (s == NULL)
+    {
+        drv2625_set_rtp_channel(ch, 0);
+        return;
+    }
+
+    low_amp = s->low_amplitude;
+    high_amp = s->high_amplitude;
+    total_amp = low_amp + high_amp;
 
     if (total_amp < HAPTICS_MIN_AMPLITUDE_THRESHOLD)
     {
@@ -536,64 +571,26 @@ static void haptics_apply_sample_to_channel(drv2625_channel_t ch, const hoja_hap
     mode = haptics_mode_from_frequency(selected_freq);
     rtp = haptics_rtp_from_amplitude(total_amp);
 
-    drv2625_set_test_mode_channel(ch, mode, HAPTICS_DEFAULT_OD_CLAMP);
+    if ((!(*mode_valid)) || (mode != *last_mode))
+    {
+        drv2625_set_test_mode_channel(ch, mode, HAPTICS_DEFAULT_OD_CLAMP);
+        *last_mode = mode;
+        *mode_valid = true;
+    }
+
     drv2625_set_rtp_channel(ch, rtp);
 }
 
-static void haptics_apply_sample_pair(const hoja_rumble_msg_s *left,
-                                      const hoja_rumble_msg_s *right,
-                                      uint8_t sample_idx)
+static void haptics_apply_frame(const haptics_packet_frame_s *frame)
 {
-    if (sample_idx < left->sample_count)
-    {
-        haptics_apply_sample_to_channel(DRV2625_CH_LEFT, &left->samples[sample_idx]);
-    }
-    else
-    {
-        drv2625_set_rtp_channel(DRV2625_CH_LEFT, 0);
-    }
+    const hoja_haptic_frame_s *left_sample;
+    const hoja_haptic_frame_s *right_sample;
 
-    if (sample_idx < right->sample_count)
-    {
-        haptics_apply_sample_to_channel(DRV2625_CH_RIGHT, &right->samples[sample_idx]);
-    }
-    else
-    {
-        drv2625_set_rtp_channel(DRV2625_CH_RIGHT, 0);
-    }
-}
+    left_sample = haptics_get_held_sample(&frame->left);
+    right_sample = haptics_get_held_sample(&frame->right);
 
-static void haptics_play_frame(haptics_packet_frame_s *frame)
-{
-    haptics_packet_frame_s next;
-    uint8_t max_samples;
-    uint8_t i;
-
-restart_frame:
-
-    max_samples = frame->left.sample_count;
-    if (frame->right.sample_count > max_samples)
-    {
-        max_samples = frame->right.sample_count;
-    }
-
-    if (max_samples == 0)
-    {
-        drv2625_stop_all();
-        return;
-    }
-
-    for (i = 0; i < max_samples; i++)
-    {
-        haptics_apply_sample_pair(&frame->left, &frame->right, i);
-        vTaskDelay(pdMS_TO_TICKS(HAPTICS_SAMPLE_WINDOW_MS));
-
-        if (xQueueReceive(s_haptics_queue, &next, 0) == pdTRUE)
-        {
-            *frame = next;
-            goto restart_frame;
-        }
-    }
+    haptics_apply_sample_to_channel(DRV2625_CH_LEFT, left_sample);
+    haptics_apply_sample_to_channel(DRV2625_CH_RIGHT, right_sample);
 }
 
 static void haptics_playback_task(void *param)
@@ -607,8 +604,8 @@ static void haptics_playback_task(void *param)
     {
         if (xQueueReceive(s_haptics_queue, &frame, pdMS_TO_TICKS(HAPTICS_IDLE_TIMEOUT_MS)) == pdTRUE)
         {
+            haptics_apply_frame(&frame);
             active = true;
-            haptics_play_frame(&frame);
         }
         else
         {
