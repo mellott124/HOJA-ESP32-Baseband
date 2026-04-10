@@ -578,4 +578,45 @@ void haptics_init(void)
 
     haptics_initialize_lookup_tables();
     _haptics_init = true;
+	
+	// 👇 ADD THIS LINE FOR TESTING
+    haptics_run_drv2625_test_modes();
+}
+
+void haptics_run_drv2625_test_mode(drv2625_test_mode_t mode)
+{
+    haptics_init();
+
+    ESP_LOGI(TAG, "Running DRV2625 test mode %d", (int)mode);
+
+    drv2625_test_pulse3_channel(DRV2625_CH_LEFT,  mode, 0x50, 20, 20);
+    vTaskDelay(pdMS_TO_TICKS(150));
+    drv2625_test_pulse3_channel(DRV2625_CH_RIGHT, mode, 0x50, 20, 20);
+    vTaskDelay(pdMS_TO_TICKS(150));
+    drv2625_test_pulse3_both(mode, 0x50, 20, 20);
+}
+
+void haptics_run_drv2625_test_modes(void)
+{
+    haptics_init();
+
+    ESP_LOGI(TAG, "Test 1: closed-loop RTP");
+    haptics_run_drv2625_test_mode(DRV2625_TEST_MODE_CLOSED_LOOP_RTP);
+    vTaskDelay(pdMS_TO_TICKS(400));
+
+    ESP_LOGI(TAG, "Test 2: open-loop 160Hz square");
+    haptics_run_drv2625_test_mode(DRV2625_TEST_MODE_OL_LRA_160_SQUARE);
+    vTaskDelay(pdMS_TO_TICKS(400));
+
+    ESP_LOGI(TAG, "Test 3: open-loop 320Hz square");
+    haptics_run_drv2625_test_mode(DRV2625_TEST_MODE_OL_LRA_320_SQUARE);
+    vTaskDelay(pdMS_TO_TICKS(400));
+
+    ESP_LOGI(TAG, "Test 4: open-loop 160Hz sine");
+    haptics_run_drv2625_test_mode(DRV2625_TEST_MODE_OL_LRA_160_SINE);
+    vTaskDelay(pdMS_TO_TICKS(400));
+
+    ESP_LOGI(TAG, "Test 5: open-loop 320Hz sine");
+    haptics_run_drv2625_test_mode(DRV2625_TEST_MODE_OL_LRA_320_SINE);
+    vTaskDelay(pdMS_TO_TICKS(400));
 }
