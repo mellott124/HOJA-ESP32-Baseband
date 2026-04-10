@@ -45,7 +45,6 @@
  *      - Safe to run without haptic hardware connected; driver initialization will skip if not found.
  * ========================================================================================= */
 
-
 #include "drv2605_esp.h"
 #include "switch_haptics.h"
 #include "esp_log.h"
@@ -67,50 +66,53 @@ const float CenterFreqLow = 160.0f;
 
 static void haptic_stop_task(void *param);
 
+static TaskHandle_t s_haptic_stop_task_handle = NULL;
+static bool _haptics_init = false;
+
 static inline float clampf(float val, float min, float max)
 {
     return (val < min) ? min : ((val > max) ? max : val);
 }
 
 const Switch5BitCommand_s CommandTable[] = {
-            {.am_action = Switch5BitAction_Default, .fm_action = Switch5BitAction_Default, .am_offset = 0.0f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore, .am_offset = 0.0f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore, .am_offset = -0.5f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore, .am_offset = -1.0f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore, .am_offset = -1.5f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore, .am_offset = -2.0f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore, .am_offset = -2.5f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore, .am_offset = -3.0f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore, .am_offset = -3.5f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore, .am_offset = -4.0f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore, .am_offset = -4.5f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore, .am_offset = -5.0f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Ignore, .fm_action = Switch5BitAction_Substitute, .am_offset = 0.0f, .fm_offset = -0.375f},
-            {.am_action = Switch5BitAction_Ignore, .fm_action = Switch5BitAction_Substitute, .am_offset = 0.0f, .fm_offset = -0.1875f},
-            {.am_action = Switch5BitAction_Ignore, .fm_action = Switch5BitAction_Substitute, .am_offset = 0.0f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Ignore, .fm_action = Switch5BitAction_Substitute, .am_offset = 0.0f, .fm_offset = 0.1875f},
-            {.am_action = Switch5BitAction_Ignore, .fm_action = Switch5BitAction_Substitute, .am_offset = 0.0f, .fm_offset = 0.375f},
-            {.am_action = Switch5BitAction_Sum, .fm_action = Switch5BitAction_Sum, .am_offset = 0.125f, .fm_offset = 0.03125f},
-            {.am_action = Switch5BitAction_Sum, .fm_action = Switch5BitAction_Ignore, .am_offset = 0.125f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Sum, .fm_action = Switch5BitAction_Sum, .am_offset = 0.125f, .fm_offset = -0.03125f},
-            {.am_action = Switch5BitAction_Sum, .fm_action = Switch5BitAction_Sum, .am_offset = 0.03125f, .fm_offset = 0.03125f},
-            {.am_action = Switch5BitAction_Sum, .fm_action = Switch5BitAction_Ignore, .am_offset = 0.03125f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Sum, .fm_action = Switch5BitAction_Sum, .am_offset = 0.03125f, .fm_offset = -0.03125f},
-            {.am_action = Switch5BitAction_Ignore, .fm_action = Switch5BitAction_Sum, .am_offset = 0.0f, .fm_offset = 0.03125f},
-            {.am_action = Switch5BitAction_Ignore, .fm_action = Switch5BitAction_Ignore, .am_offset = 0.0f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Ignore, .fm_action = Switch5BitAction_Sum, .am_offset = 0.0f, .fm_offset = -0.03125f},
-            {.am_action = Switch5BitAction_Sum, .fm_action = Switch5BitAction_Sum, .am_offset = -0.03125f, .fm_offset = 0.03125f},
-            {.am_action = Switch5BitAction_Sum, .fm_action = Switch5BitAction_Ignore, .am_offset = -0.03125f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Sum, .fm_action = Switch5BitAction_Sum, .am_offset = -0.03125f, .fm_offset = -0.03125f},
-            {.am_action = Switch5BitAction_Sum, .fm_action = Switch5BitAction_Sum, .am_offset = -0.125f, .fm_offset = 0.03125f},
-            {.am_action = Switch5BitAction_Sum, .fm_action = Switch5BitAction_Ignore, .am_offset = -0.125f, .fm_offset = 0.0f},
-            {.am_action = Switch5BitAction_Sum, .fm_action = Switch5BitAction_Sum, .am_offset = -0.125f, .fm_offset = -0.03125f}
-        };
+    {.am_action = Switch5BitAction_Default,    .fm_action = Switch5BitAction_Default,    .am_offset = 0.0f,      .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore,     .am_offset = 0.0f,      .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore,     .am_offset = -0.5f,     .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore,     .am_offset = -1.0f,     .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore,     .am_offset = -1.5f,     .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore,     .am_offset = -2.0f,     .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore,     .am_offset = -2.5f,     .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore,     .am_offset = -3.0f,     .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore,     .am_offset = -3.5f,     .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore,     .am_offset = -4.0f,     .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore,     .am_offset = -4.5f,     .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Substitute, .fm_action = Switch5BitAction_Ignore,     .am_offset = -5.0f,     .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Ignore,     .fm_action = Switch5BitAction_Substitute, .am_offset = 0.0f,      .fm_offset = -0.375f},
+    {.am_action = Switch5BitAction_Ignore,     .fm_action = Switch5BitAction_Substitute, .am_offset = 0.0f,      .fm_offset = -0.1875f},
+    {.am_action = Switch5BitAction_Ignore,     .fm_action = Switch5BitAction_Substitute, .am_offset = 0.0f,      .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Ignore,     .fm_action = Switch5BitAction_Substitute, .am_offset = 0.0f,      .fm_offset = 0.1875f},
+    {.am_action = Switch5BitAction_Ignore,     .fm_action = Switch5BitAction_Substitute, .am_offset = 0.0f,      .fm_offset = 0.375f},
+    {.am_action = Switch5BitAction_Sum,        .fm_action = Switch5BitAction_Sum,        .am_offset = 0.125f,    .fm_offset = 0.03125f},
+    {.am_action = Switch5BitAction_Sum,        .fm_action = Switch5BitAction_Ignore,     .am_offset = 0.125f,    .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Sum,        .fm_action = Switch5BitAction_Sum,        .am_offset = 0.125f,    .fm_offset = -0.03125f},
+    {.am_action = Switch5BitAction_Sum,        .fm_action = Switch5BitAction_Sum,        .am_offset = 0.03125f,  .fm_offset = 0.03125f},
+    {.am_action = Switch5BitAction_Sum,        .fm_action = Switch5BitAction_Ignore,     .am_offset = 0.03125f,  .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Sum,        .fm_action = Switch5BitAction_Sum,        .am_offset = 0.03125f,  .fm_offset = -0.03125f},
+    {.am_action = Switch5BitAction_Ignore,     .fm_action = Switch5BitAction_Sum,        .am_offset = 0.0f,      .fm_offset = 0.03125f},
+    {.am_action = Switch5BitAction_Ignore,     .fm_action = Switch5BitAction_Ignore,     .am_offset = 0.0f,      .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Ignore,     .fm_action = Switch5BitAction_Sum,        .am_offset = 0.0f,      .fm_offset = -0.03125f},
+    {.am_action = Switch5BitAction_Sum,        .fm_action = Switch5BitAction_Sum,        .am_offset = -0.03125f, .fm_offset = 0.03125f},
+    {.am_action = Switch5BitAction_Sum,        .fm_action = Switch5BitAction_Ignore,     .am_offset = -0.03125f, .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Sum,        .fm_action = Switch5BitAction_Sum,        .am_offset = -0.03125f, .fm_offset = -0.03125f},
+    {.am_action = Switch5BitAction_Sum,        .fm_action = Switch5BitAction_Sum,        .am_offset = -0.125f,   .fm_offset = 0.03125f},
+    {.am_action = Switch5BitAction_Sum,        .fm_action = Switch5BitAction_Ignore,     .am_offset = -0.125f,   .fm_offset = 0.0f},
+    {.am_action = Switch5BitAction_Sum,        .fm_action = Switch5BitAction_Sum,        .am_offset = -0.125f,   .fm_offset = -0.03125f}
+};
 
-#define EXP_BASE2_RANGE_START (-8.0f)
-#define EXP_BASE2_RANGE_END (2.0f)
-#define EXP_BASE2_LOOKUP_RESOLUTION (1 / 32.0f)
-#define EXP_BASE2_LOOKUP_LENGTH 320 //((size_t)(((EXP_BASE2_RANGE_END - EXP_BASE2_RANGE_START) + EXP_BASE2_LOOKUP_RESOLUTION) / EXP_BASE2_LOOKUP_RESOLUTION))
+#define EXP_BASE2_RANGE_START        (-8.0f)
+#define EXP_BASE2_RANGE_END          (2.0f)
+#define EXP_BASE2_LOOKUP_RESOLUTION  (1 / 32.0f)
+#define EXP_BASE2_LOOKUP_LENGTH      320
 
 static float ExpBase2Lookup[EXP_BASE2_LOOKUP_LENGTH];
 static float RumbleAmpLookup[128];
@@ -172,19 +174,17 @@ float haptics_apply_command(Switch5BitAction_t action, float offset, float curre
 {
     switch (action)
     {
-    case Switch5BitAction_Ignore: // Cmd 0
-        return current;
-    case Switch5BitAction_Substitute: // Cmd 2
-        return offset;
-    case Switch5BitAction_Sum: // Cmd 3
-        return clampf(current + offset, min, max);
-    default: // Cmd 1
-        return default_val;
+        case Switch5BitAction_Ignore:
+            return current;
+        case Switch5BitAction_Substitute:
+            return offset;
+        case Switch5BitAction_Sum:
+            return clampf(current + offset, min, max);
+        default:
+            return default_val;
     }
 }
 
-static bool _haptics_init = false;
-// Call this function to initialize all lookup tables
 void haptics_initialize_lookup_tables(void)
 {
     initialize_exp_base2_lookup();
@@ -212,25 +212,22 @@ void haptics_linear_set_default(hoja_haptic_frame_linear_s *state)
     state->lo_freq_linear = DefaultFrequency;
 }
 
-// Functionally does what GetOutputValue does in the original documentation
 void haptics_linear_to_normal(hoja_haptic_frame_linear_s *linear, hoja_haptic_frame_s *decoded)
 {
     decoded->high_frequency = ExpBase2Lookup[haptics_get_lookup_index(linear->hi_freq_linear)] * CenterFreqHigh;
-    decoded->low_frequency = ExpBase2Lookup[haptics_get_lookup_index(linear->lo_freq_linear)] * CenterFreqLow;
+    decoded->low_frequency  = ExpBase2Lookup[haptics_get_lookup_index(linear->lo_freq_linear)] * CenterFreqLow;
     decoded->high_amplitude = ExpBase2Lookup[haptics_get_lookup_index(linear->hi_amp_linear)];
-    decoded->low_amplitude = ExpBase2Lookup[haptics_get_lookup_index(linear->lo_amp_linear)];
+    decoded->low_amplitude  = ExpBase2Lookup[haptics_get_lookup_index(linear->lo_amp_linear)];
 }
 
 void _haptics_decode_type_1(const SwitchHapticPacket_s *encoded, hoja_rumble_msg_s *decoded)
 {
     uint8_t samples = encoded->frame_count;
-    decoded->sample_count = samples;
-
-    // decoded->count = 3;
     Switch5BitCommand_s hi_cmd = {0};
     Switch5BitCommand_s low_cmd = {0};
 
-    // Decode sample 0
+    decoded->sample_count = samples;
+
     if (samples > 0)
     {
         hi_cmd = CommandTable[encoded->type1.cmd_hi_0];
@@ -248,7 +245,6 @@ void _haptics_decode_type_1(const SwitchHapticPacket_s *encoded, hoja_rumble_msg
         haptics_linear_to_normal(&(decoded->linear), &(decoded->samples[0]));
     }
 
-    // Decode sample 1
     if (samples > 1)
     {
         hi_cmd = CommandTable[encoded->type1.cmd_hi_1];
@@ -266,7 +262,6 @@ void _haptics_decode_type_1(const SwitchHapticPacket_s *encoded, hoja_rumble_msg
         haptics_linear_to_normal(&(decoded->linear), &(decoded->samples[1]));
     }
 
-    // Decode sample 2
     if (samples > 2)
     {
         hi_cmd = CommandTable[encoded->type1.cmd_hi_2];
@@ -292,28 +287,26 @@ void _haptics_decode_type_2(const SwitchHapticPacket_s *encoded, hoja_rumble_msg
 
     decoded->linear.hi_freq_linear = RumbleFreqLookup[encoded->type2.freq_hi];
     decoded->linear.lo_freq_linear = RumbleFreqLookup[encoded->type2.freq_lo];
-    decoded->linear.hi_amp_linear = RumbleAmpLookup[encoded->type2.amp_hi];
-    decoded->linear.lo_amp_linear = RumbleAmpLookup[encoded->type2.amp_lo];
+    decoded->linear.hi_amp_linear  = RumbleAmpLookup[encoded->type2.amp_hi];
+    decoded->linear.lo_amp_linear  = RumbleAmpLookup[encoded->type2.amp_lo];
 
     haptics_linear_to_normal(&(decoded->linear), &(decoded->samples[0]));
 }
 
 void _haptics_decode_type_3(const SwitchHapticPacket_s *encoded, hoja_rumble_msg_s *decoded)
 {
-    // decoded->count = 2;
     Switch5BitCommand_s hi_cmd = {0};
     Switch5BitCommand_s low_cmd = {0};
-
     uint8_t samples = encoded->frame_count;
+
     decoded->sample_count = samples;
 
-    // Decode sample 0
     if (samples > 0)
     {
         if (encoded->type3.high_select)
         {
             decoded->linear.hi_freq_linear = RumbleFreqLookup[encoded->type3.freq_xx_0];
-            decoded->linear.hi_amp_linear = RumbleAmpLookup[encoded->type3.amp_xx_0];
+            decoded->linear.hi_amp_linear  = RumbleAmpLookup[encoded->type3.amp_xx_0];
 
             low_cmd = CommandTable[encoded->type3.cmd_xx_0];
             decoded->linear.lo_freq_linear = haptics_apply_command(low_cmd.fm_action, low_cmd.fm_offset,
@@ -324,7 +317,7 @@ void _haptics_decode_type_3(const SwitchHapticPacket_s *encoded, hoja_rumble_msg
         else
         {
             decoded->linear.lo_freq_linear = RumbleFreqLookup[encoded->type3.freq_xx_0];
-            decoded->linear.lo_amp_linear = RumbleAmpLookup[encoded->type3.amp_xx_0];
+            decoded->linear.lo_amp_linear  = RumbleAmpLookup[encoded->type3.amp_xx_0];
 
             hi_cmd = CommandTable[encoded->type3.cmd_xx_0];
             decoded->linear.hi_freq_linear = haptics_apply_command(hi_cmd.fm_action, hi_cmd.fm_offset,
@@ -332,10 +325,10 @@ void _haptics_decode_type_3(const SwitchHapticPacket_s *encoded, hoja_rumble_msg
             decoded->linear.hi_amp_linear = haptics_apply_command(hi_cmd.am_action, hi_cmd.am_offset,
                                                                   decoded->linear.hi_amp_linear, DefaultAmplitude, MinAmplitude, MaxAmplitude);
         }
+
         haptics_linear_to_normal(&(decoded->linear), &(decoded->samples[0]));
     }
 
-    // Decode sample 1
     if (samples > 1)
     {
         hi_cmd = CommandTable[encoded->type3.cmd_hi_1];
@@ -358,11 +351,10 @@ void _haptics_decode_type_4(const SwitchHapticPacket_s *encoded, hoja_rumble_msg
 {
     Switch5BitCommand_s hi_cmd = {0};
     Switch5BitCommand_s low_cmd = {0};
-
     uint8_t samples = encoded->frame_count;
+
     decoded->sample_count = samples;
 
-    // Decode sample 0
     if (samples > 0)
     {
         if (encoded->type4.high_select)
@@ -391,7 +383,6 @@ void _haptics_decode_type_4(const SwitchHapticPacket_s *encoded, hoja_rumble_msg
         haptics_linear_to_normal(&(decoded->linear), &(decoded->samples[0]));
     }
 
-    // Decode sample 1
     if (samples > 1)
     {
         hi_cmd = CommandTable[encoded->type4.cmd_hi_1];
@@ -409,7 +400,6 @@ void _haptics_decode_type_4(const SwitchHapticPacket_s *encoded, hoja_rumble_msg
         haptics_linear_to_normal(&(decoded->linear), &(decoded->samples[1]));
     }
 
-    // Decode sample 2
     if (samples > 2)
     {
         hi_cmd = CommandTable[encoded->type4.cmd_hi_2];
@@ -428,14 +418,13 @@ void _haptics_decode_type_4(const SwitchHapticPacket_s *encoded, hoja_rumble_msg
     }
 }
 
-// This will detect and call the appropriate decoding schema
-void _haptics_decode_samples(const SwitchHapticPacket_s *encoded,
-                            hoja_rumble_msg_s *decoded)
+void _haptics_decode_samples(const SwitchHapticPacket_s *encoded, hoja_rumble_msg_s *decoded)
 {
     switch (encoded->frame_count)
     {
         case 0:
             break;
+
         case 1:
             if ((encoded->data & 0xFFFFF) == 0)
             {
@@ -450,6 +439,7 @@ void _haptics_decode_samples(const SwitchHapticPacket_s *encoded,
                 _haptics_decode_type_4(encoded, decoded);
             }
             break;
+
         case 2:
             if ((encoded->data & 0x3FF) == 0)
             {
@@ -460,91 +450,132 @@ void _haptics_decode_samples(const SwitchHapticPacket_s *encoded,
                 _haptics_decode_type_3(encoded, decoded);
             }
             break;
+
         case 3:
             _haptics_decode_type_1(encoded, decoded);
             break;
-    };
+    }
 }
 
-/**
- * Translate Switch rumble packets to DRV2605 RTP output.
- * Called whenever the Switch sends 8-byte rumble data.
- */
+static int8_t haptics_scale_switch_amplitude(float amp_f)
+{
+    float scaled = amp_f * 6.0f;
+
+    if (scaled > 1.0f)
+    {
+        scaled = 1.0f;
+    }
+    if (scaled < 0.0f)
+    {
+        scaled = 0.0f;
+    }
+
+    return (int8_t)(scaled * 127.0f);
+}
+
 void haptics_rumble_translate(const uint8_t *data)
 {
-    if (!data) return;
-
     static hoja_rumble_msg_s left = {0};
     static hoja_rumble_msg_s right = {0};
-    static uint8_t last_amp = 0;
+    static int8_t last_amp_left = 0;
+    static int8_t last_amp_right = 0;
 
-    // Decode the left and right 4-byte haptic packets
+    float amp_f_left;
+    float amp_f_right;
+    int8_t amp_left;
+    int8_t amp_right;
+
+    if (!data)
+    {
+        return;
+    }
+
     _haptics_decode_samples((const SwitchHapticPacket_s *)data, &left);
     _haptics_decode_samples((const SwitchHapticPacket_s *)&data[4], &right);
 
-    float amp_f_left  = left.samples[0].high_amplitude;
-    float amp_f_right = right.samples[0].high_amplitude;
+    amp_f_left  = left.samples[0].high_amplitude;
+    amp_f_right = right.samples[0].high_amplitude;
 
-    // Scale up Switch amplitudes (~0–0.25 typical)
-    amp_f_left  *= 6.0f;
-    amp_f_right *= 6.0f;
-    if (amp_f_left  > 1.0f) amp_f_left  = 1.0f;
-    if (amp_f_right > 1.0f) amp_f_right = 1.0f;
+    amp_left  = haptics_scale_switch_amplitude(amp_f_left);
+    amp_right = haptics_scale_switch_amplitude(amp_f_right);
 
-    uint8_t amp_left  = (uint8_t)(amp_f_left  * 127.0f);
-    uint8_t amp_right = (uint8_t)(amp_f_right * 127.0f);
-    uint8_t amp       = (amp_left + amp_right) / 2;
+    if ((amp_left > 0) || (amp_right > 0))
+    {
+        ESP_LOGI(TAG, "Decoded amp L=%.3f R=%.3f (RTP L=%d R=%d)",
+                 amp_f_left, amp_f_right, amp_left, amp_right);
+    }
 
-    if(amp>0)
-		ESP_LOGI(TAG, "Decoded amp L=%.3f R=%.3f (RTP=%d)", amp_f_left, amp_f_right, amp);
+    if (amp_left < 5)
+    {
+        amp_left = 0;
+    }
 
-    // If the rumble signal is near zero, stop the motor
-    if (amp < 5) {
-        if (last_amp != 0) {
-            drv2605_set_rtp(0);
-            //ESP_LOGI(TAG, "Stop rumble (low amp)");
-            last_amp = 0;
+    if (amp_right < 5)
+    {
+        amp_right = 0;
+    }
+
+    if ((amp_left == 0) && (amp_right == 0))
+    {
+        if ((last_amp_left != 0) || (last_amp_right != 0))
+        {
+            drv2625_stop_all();
+            last_amp_left = 0;
+            last_amp_right = 0;
         }
         return;
     }
 
-    // Re-enter RTP mode (safe guard)
-    drv2605_write(DRV2605_REG_MODE, DRV2605_MODE_RTP);
-    drv2605_set_rtp(amp);
-    last_amp = amp;
+    drv2625_set_rtp_channel(DRV2625_CH_LEFT, amp_left);
+    drv2625_set_rtp_channel(DRV2625_CH_RIGHT, amp_right);
 
-    // Start a short background task that turns off rumble after 200 ms
+    last_amp_left = amp_left;
+    last_amp_right = amp_right;
+
+    if (s_haptic_stop_task_handle != NULL)
+    {
+        vTaskDelete(s_haptic_stop_task_handle);
+        s_haptic_stop_task_handle = NULL;
+    }
+
     xTaskCreatePinnedToCore(
         haptic_stop_task,
         "haptic_stop_timer",
         2048,
         NULL,
         1,
-        NULL,
+        &s_haptic_stop_task_handle,
         tskNO_AFFINITY);
 }
 
-/**
- * Task that waits briefly, then stops the rumble motor.
- */
 static void haptic_stop_task(void *param)
 {
-    vTaskDelay(pdMS_TO_TICKS(200));   // 0.2 s rumble duration
-    drv2605_set_rtp(0);
-    //ESP_LOGI("HAPTIC", "Auto-stop rumble (timeout)");
+    (void)param;
+
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    drv2625_stop_all();
+    s_haptic_stop_task_handle = NULL;
     vTaskDelete(NULL);
 }
 
 void haptics_init(void)
 {
-    if (_haptics_init)
-        return;
+    esp_err_t err;
 
-    ESP_LOGI("HAPTIC", "Initializing haptic subsystem...");
-    drv2605_init();
+    if (_haptics_init)
+    {
+        return;
+    }
+
+    ESP_LOGI(TAG, "Initializing haptic subsystem...");
+
+    err = drv2625_init();
+    if (err != ESP_OK)
+    {
+        ESP_LOGW(TAG, "DRV2625 init returned %s", esp_err_to_name(err));
+    }
+
     haptics_initialize_lookup_tables();
     _haptics_init = true;
 }
-
-
-
