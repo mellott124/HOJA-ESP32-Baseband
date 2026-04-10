@@ -47,9 +47,14 @@
 
 #include "drv2605_esp.h"
 #include "switch_haptics.h"
+
+#include <math.h>
+#include <string.h>
+
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 
 static const char *TAG = "HAPTIC";
 
@@ -64,10 +69,27 @@ const float StartingAmplitude = -7.9375f;
 const float CenterFreqHigh = 320.0f;
 const float CenterFreqLow = 160.0f;
 
-static void haptic_stop_task(void *param);
+#define HAPTICS_QUEUE_DEPTH              1
+#define HAPTICS_COMPONENT_SLICE_MS       10
+#define HAPTICS_IDLE_TIMEOUT_MS          20
+#define HAPTICS_MIN_AMPLITUDE_THRESHOLD  0.008f
+#define HAPTICS_OUTPUT_GAIN              6.0f
+#define HAPTICS_DEFAULT_OD_CLAMP         0x70
 
-static TaskHandle_t s_haptic_stop_task_handle = NULL;
+static void haptics_playback_task(void *param);
+
+static QueueHandle_t s_haptics_queue = NULL;
+static TaskHandle_t s_haptics_task_handle = NULL;
 static bool _haptics_init = false;
+
+static hoja_rumble_msg_s s_decode_left = {0};
+static hoja_rumble_msg_s s_decode_right = {0};
+
+typedef struct
+{
+    hoja_rumble_msg_s left;
+    hoja_rumble_msg_s right;
+} haptics_packet_frame_s;
 
 static inline float clampf(float val, float min, float max)
 {
@@ -109,10 +131,10 @@ const Switch5BitCommand_s CommandTable[] = {
     {.am_action = Switch5BitAction_Sum,        .fm_action = Switch5BitAction_Sum,        .am_offset = -0.125f,   .fm_offset = -0.03125f}
 };
 
-#define EXP_BASE2_RANGE_START        (-8.0f)
-#define EXP_BASE2_RANGE_END          (2.0f)
-#define EXP_BASE2_LOOKUP_RESOLUTION  (1 / 32.0f)
-#define EXP_BASE2_LOOKUP_LENGTH      320
+#define EXP_BASE2_RANGE_START (-8.0f)
+#define EXP_BASE2_RANGE_END (2.0f)
+#define EXP_BASE2_LOOKUP_RESOLUTION (1 / 32.0f)
+#define EXP_BASE2_LOOKUP_LENGTH 320
 
 static float ExpBase2Lookup[EXP_BASE2_LOOKUP_LENGTH];
 static float RumbleAmpLookup[128];
@@ -423,6 +445,7 @@ void _haptics_decode_samples(const SwitchHapticPacket_s *encoded, hoja_rumble_ms
     switch (encoded->frame_count)
     {
         case 0:
+            decoded->sample_count = 0;
             break;
 
         case 1:
@@ -457,106 +480,166 @@ void _haptics_decode_samples(const SwitchHapticPacket_s *encoded, hoja_rumble_ms
     }
 }
 
-static int8_t haptics_scale_switch_amplitude(float amp_f)
+static drv2625_test_mode_t haptics_mode_from_frequency(float frequency_hz)
 {
-    float scaled = amp_f * 6.0f;
+    float diff160 = fabsf(frequency_hz - 160.0f);
+    float diff320 = fabsf(frequency_hz - 320.0f);
 
-    if (scaled > 1.0f)
+    if (diff160 <= diff320)
     {
-        scaled = 1.0f;
+        return DRV2625_TEST_MODE_OL_LRA_160_SINE;
     }
+
+    return DRV2625_TEST_MODE_OL_LRA_320_SINE;
+}
+
+static int8_t haptics_rtp_from_amplitude(float amplitude)
+{
+    float scaled = amplitude * HAPTICS_OUTPUT_GAIN;
+
     if (scaled < 0.0f)
     {
         scaled = 0.0f;
+    }
+    if (scaled > 1.0f)
+    {
+        scaled = 1.0f;
     }
 
     return (int8_t)(scaled * 127.0f);
 }
 
-void haptics_rumble_translate(const uint8_t *data)
+static void haptics_apply_component(drv2625_channel_t ch, float frequency_hz, float amplitude)
 {
-    static hoja_rumble_msg_s left = {0};
-    static hoja_rumble_msg_s right = {0};
-    static int8_t last_amp_left = 0;
-    static int8_t last_amp_right = 0;
+    drv2625_test_mode_t mode;
+    int8_t rtp;
 
-    float amp_f_left;
-    float amp_f_right;
-    int8_t amp_left;
-    int8_t amp_right;
-
-    if (!data)
+    if (amplitude < HAPTICS_MIN_AMPLITUDE_THRESHOLD)
     {
+        drv2625_set_rtp_channel(ch, 0);
         return;
     }
 
-    _haptics_decode_samples((const SwitchHapticPacket_s *)data, &left);
-    _haptics_decode_samples((const SwitchHapticPacket_s *)&data[4], &right);
+    mode = haptics_mode_from_frequency(frequency_hz);
+    rtp = haptics_rtp_from_amplitude(amplitude);
 
-    amp_f_left  = left.samples[0].high_amplitude;
-    amp_f_right = right.samples[0].high_amplitude;
-
-    amp_left  = haptics_scale_switch_amplitude(amp_f_left);
-    amp_right = haptics_scale_switch_amplitude(amp_f_right);
-
-    if ((amp_left > 0) || (amp_right > 0))
-    {
-        ESP_LOGI(TAG, "Decoded amp L=%.3f R=%.3f (RTP L=%d R=%d)",
-                 amp_f_left, amp_f_right, amp_left, amp_right);
-    }
-
-    if (amp_left < 5)
-    {
-        amp_left = 0;
-    }
-
-    if (amp_right < 5)
-    {
-        amp_right = 0;
-    }
-
-    if ((amp_left == 0) && (amp_right == 0))
-    {
-        if ((last_amp_left != 0) || (last_amp_right != 0))
-        {
-            drv2625_stop_all();
-            last_amp_left = 0;
-            last_amp_right = 0;
-        }
-        return;
-    }
-
-    drv2625_set_rtp_channel(DRV2625_CH_LEFT, amp_left);
-    drv2625_set_rtp_channel(DRV2625_CH_RIGHT, amp_right);
-
-    last_amp_left = amp_left;
-    last_amp_right = amp_right;
-
-    if (s_haptic_stop_task_handle != NULL)
-    {
-        vTaskDelete(s_haptic_stop_task_handle);
-        s_haptic_stop_task_handle = NULL;
-    }
-
-    xTaskCreatePinnedToCore(
-        haptic_stop_task,
-        "haptic_stop_timer",
-        2048,
-        NULL,
-        1,
-        &s_haptic_stop_task_handle,
-        tskNO_AFFINITY);
+    drv2625_set_test_mode_channel(ch, mode, HAPTICS_DEFAULT_OD_CLAMP);
+    drv2625_set_rtp_channel(ch, rtp);
 }
 
-static void haptic_stop_task(void *param)
+static void haptics_apply_band_pair(const hoja_rumble_msg_s *left,
+                                    const hoja_rumble_msg_s *right,
+                                    uint8_t sample_idx,
+                                    bool low_band)
 {
+    if (sample_idx < left->sample_count)
+    {
+        const hoja_haptic_frame_s *s = &left->samples[sample_idx];
+        haptics_apply_component(DRV2625_CH_LEFT,
+                                low_band ? s->low_frequency : s->high_frequency,
+                                low_band ? s->low_amplitude : s->high_amplitude);
+    }
+    else
+    {
+        drv2625_set_rtp_channel(DRV2625_CH_LEFT, 0);
+    }
+
+    if (sample_idx < right->sample_count)
+    {
+        const hoja_haptic_frame_s *s = &right->samples[sample_idx];
+        haptics_apply_component(DRV2625_CH_RIGHT,
+                                low_band ? s->low_frequency : s->high_frequency,
+                                low_band ? s->low_amplitude : s->high_amplitude);
+    }
+    else
+    {
+        drv2625_set_rtp_channel(DRV2625_CH_RIGHT, 0);
+    }
+}
+
+static void haptics_play_frame(haptics_packet_frame_s *frame)
+{
+    haptics_packet_frame_s next;
+    uint8_t max_samples;
+    uint8_t i;
+
+restart_frame:
+
+    max_samples = frame->left.sample_count;
+    if (frame->right.sample_count > max_samples)
+    {
+        max_samples = frame->right.sample_count;
+    }
+
+    if (max_samples == 0)
+    {
+        drv2625_stop_all();
+        return;
+    }
+
+    for (i = 0; i < max_samples; i++)
+    {
+        haptics_apply_band_pair(&frame->left, &frame->right, i, true);
+        vTaskDelay(pdMS_TO_TICKS(HAPTICS_COMPONENT_SLICE_MS));
+
+        if (xQueueReceive(s_haptics_queue, &next, 0) == pdTRUE)
+        {
+            *frame = next;
+            goto restart_frame;
+        }
+
+        haptics_apply_band_pair(&frame->left, &frame->right, i, false);
+        vTaskDelay(pdMS_TO_TICKS(HAPTICS_COMPONENT_SLICE_MS));
+
+        if (xQueueReceive(s_haptics_queue, &next, 0) == pdTRUE)
+        {
+            *frame = next;
+            goto restart_frame;
+        }
+    }
+}
+
+static void haptics_playback_task(void *param)
+{
+    haptics_packet_frame_s frame;
+    bool active = false;
+
     (void)param;
 
-    vTaskDelay(pdMS_TO_TICKS(200));
+    while (1)
+    {
+        if (xQueueReceive(s_haptics_queue, &frame, pdMS_TO_TICKS(HAPTICS_IDLE_TIMEOUT_MS)) == pdTRUE)
+        {
+            active = true;
+            haptics_play_frame(&frame);
+        }
+        else
+        {
+            if (active)
+            {
+                drv2625_stop_all();
+                active = false;
+            }
+        }
+    }
+}
 
-    drv2625_stop_all();
-    s_haptic_stop_task_handle = NULL;
-    vTaskDelete(NULL);
+void haptics_rumble_translate(const uint8_t *data)
+{
+    haptics_packet_frame_s frame;
+
+    if (!data || !_haptics_init || (s_haptics_queue == NULL))
+    {
+        return;
+    }
+
+    _haptics_decode_samples((const SwitchHapticPacket_s *)data, &s_decode_left);
+    _haptics_decode_samples((const SwitchHapticPacket_s *)&data[4], &s_decode_right);
+
+    frame.left = s_decode_left;
+    frame.right = s_decode_right;
+
+    xQueueOverwrite(s_haptics_queue, &frame);
 }
 
 void haptics_init(void)
@@ -577,46 +660,31 @@ void haptics_init(void)
     }
 
     haptics_initialize_lookup_tables();
+
+    memset(&s_decode_left, 0, sizeof(s_decode_left));
+    memset(&s_decode_right, 0, sizeof(s_decode_right));
+    haptics_linear_set_default(&s_decode_left.linear);
+    haptics_linear_set_default(&s_decode_right.linear);
+
+    s_haptics_queue = xQueueCreate(HAPTICS_QUEUE_DEPTH, sizeof(haptics_packet_frame_s));
+    if (s_haptics_queue == NULL)
+    {
+        ESP_LOGE(TAG, "Failed to create haptics queue");
+        return;
+    }
+
+    if (xTaskCreatePinnedToCore(
+            haptics_playback_task,
+            "haptics_playback",
+            4096,
+            NULL,
+            2,
+            &s_haptics_task_handle,
+            tskNO_AFFINITY) != pdPASS)
+    {
+        ESP_LOGE(TAG, "Failed to create haptics playback task");
+        return;
+    }
+
     _haptics_init = true;
-	
-	// 👇 ADD THIS LINE FOR TESTING
-    haptics_run_drv2625_test_modes();
-}
-
-void haptics_run_drv2625_test_mode(drv2625_test_mode_t mode)
-{
-    haptics_init();
-
-    ESP_LOGI(TAG, "Running DRV2625 test mode %d", (int)mode);
-
-    drv2625_test_pulse3_channel(DRV2625_CH_LEFT,  mode, 0x50, 20, 20);
-    vTaskDelay(pdMS_TO_TICKS(150));
-    drv2625_test_pulse3_channel(DRV2625_CH_RIGHT, mode, 0x50, 20, 20);
-    vTaskDelay(pdMS_TO_TICKS(150));
-    drv2625_test_pulse3_both(mode, 0x50, 20, 20);
-}
-
-void haptics_run_drv2625_test_modes(void)
-{
-    haptics_init();
-
-    ESP_LOGI(TAG, "Test 1: closed-loop RTP");
-    haptics_run_drv2625_test_mode(DRV2625_TEST_MODE_CLOSED_LOOP_RTP);
-    vTaskDelay(pdMS_TO_TICKS(400));
-
-    ESP_LOGI(TAG, "Test 2: open-loop 160Hz square");
-    haptics_run_drv2625_test_mode(DRV2625_TEST_MODE_OL_LRA_160_SQUARE);
-    vTaskDelay(pdMS_TO_TICKS(400));
-
-    ESP_LOGI(TAG, "Test 3: open-loop 320Hz square");
-    haptics_run_drv2625_test_mode(DRV2625_TEST_MODE_OL_LRA_320_SQUARE);
-    vTaskDelay(pdMS_TO_TICKS(400));
-
-    ESP_LOGI(TAG, "Test 4: open-loop 160Hz sine");
-    haptics_run_drv2625_test_mode(DRV2625_TEST_MODE_OL_LRA_160_SINE);
-    vTaskDelay(pdMS_TO_TICKS(400));
-
-    ESP_LOGI(TAG, "Test 5: open-loop 320Hz sine");
-    haptics_run_drv2625_test_mode(DRV2625_TEST_MODE_OL_LRA_320_SINE);
-    vTaskDelay(pdMS_TO_TICKS(400));
 }

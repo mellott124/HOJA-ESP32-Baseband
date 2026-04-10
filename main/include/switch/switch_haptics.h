@@ -113,7 +113,5 @@ typedef struct
 void haptics_rumble_translate(const uint8_t *data);
 void haptics_initialize_lookup_tables(void);
 void haptics_init(void);
-void haptics_run_drv2625_test_modes(void);
-void haptics_run_drv2625_test_mode(drv2625_test_mode_t mode);
 
 #endif
