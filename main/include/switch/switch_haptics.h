@@ -1,28 +1,10 @@
 /* =========================================================================================
- *  HAPTICS INTERFACE — RETROONYX VIRTUAL BOY WIRELESS CONTROLLER
- *  -----------------------------------------------------------------------------------------
- *  Purpose:
- *      Defines the public interface for the Nintendo Switch haptic subsystem. 
- *      Provides initialization and runtime translation functions to handle rumble packets 
- *      received from the Switch and convert them to DRV2605L/DRV2625-compatible I²C commands.
- *
- *  Current Implementation:
- *      - Supports DRV2605L in RTP mode (single-channel operation).
- *      - Decodes incoming HID rumble packets from the Switch via app_set_switch_haptic().
- *      - Outputs amplitude data over I²C to drive the attached LRA module.
- *      - Safe to call even if no hardware is detected; initialization logs will indicate status.
- *
- *  Public API:
- *      void haptics_init(void);
- *          Initializes the haptic subsystem and I²C driver interface.
- *
- *      void haptics_rumble_translate(uint8_t *data);
- *          Decodes and executes vibration commands received from the Switch host.
- *
- *  Future Extensions:
- *      - Add DRV2625 dual-channel (Left/Right) support.
- *      - Integrate enable GPIO control and amplitude tuning table.
- *      - Optional fade-out timing for smoother haptic response.
+ *  File: switch_haptics.h
+ *  Project: RetroOnyx Virtual Boy Wireless Controller
+ *  Summary:
+ *      Public interface for the Nintendo Switch haptics subsystem. This interface
+ *      exposes initialization and rumble translation entry points for dual DRV2625
+ *      playback, including left-only, right-only, and broadcast playback paths.
  * ========================================================================================= */
 #ifndef SWITCH_HAPTICS_H
 #define SWITCH_HAPTICS_H
