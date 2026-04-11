@@ -1,11 +1,16 @@
 /* =========================================================================================
- *  File: switch_haptics.c
- *  Project: RetroOnyx Virtual Boy Wireless Controller
- *  Summary:
- *      Nintendo Switch rumble decode and playback layer for dual DRV2625 devices.
- *      This revision keeps change-only logging, clamps lookup table access to avoid
- *      out-of-bounds reads at the +2.0 endpoint, and guards runtime queue use so
- *      haptics_rumble_translate() is safe if called before haptics_init().
+ *  FILE: switch_haptics.c
+ *  -----------------------------------------------------------------------------------------
+ *  Nintendo Switch rumble decode and DRV2625 playback for the RetroOnyx Virtual Boy
+ *  wireless controller.
+ *
+ *  Current playback policy:
+ *    - Decode incoming Switch low/high-band rumble packets for left and right.
+ *    - For each decoded sample, pick the frequency of the larger-amplitude band.
+ *    - Use the average of the high/low amplitudes as the rendered amplitude.
+ *    - Left-only samples drive LEFT, right-only samples drive RIGHT, and both-active
+ *      samples use the existing BROADCAST path.
+ *    - Silent keepalive packets are suppressed in verbose logs.
  * ========================================================================================= */
 #include "drv2605_esp.h"
 #include "switch_haptics.h"
@@ -34,8 +39,9 @@ const float CenterFreqLow = 160.0f;
 #define HAPTICS_QUEUE_DEPTH              1
 #define HAPTICS_IDLE_TIMEOUT_MS          100
 #define HAPTICS_SUBFRAME_DELAY_MS        8
+#define HAPTICS_SILENT_HOLD_MS          20
 #define HAPTICS_MIN_AMPLITUDE_THRESHOLD  0.001f
-#define HAPTICS_OUTPUT_GAIN              6.0f
+#define HAPTICS_OUTPUT_GAIN              3.0f
 #define HAPTICS_DEFAULT_OD_CLAMP         0x70
 
 typedef enum
@@ -71,6 +77,7 @@ static bool s_mode_valid_right = false;
 static bool s_mode_valid_broadcast = false;
 
 static haptics_output_path_t s_current_path = HAPTICS_PATH_NONE;
+static TickType_t s_last_active_tick = 0;
 
 static inline float clampf(float val, float min, float max)
 {
@@ -84,6 +91,11 @@ static bool haptics_sample_active(const hoja_haptic_frame_s *s)
     }
 
     return ((s->low_amplitude + s->high_amplitude) >= HAPTICS_MIN_AMPLITUDE_THRESHOLD);
+}
+
+static bool haptics_band_active(float amplitude)
+{
+    return (amplitude >= HAPTICS_MIN_AMPLITUDE_THRESHOLD);
 }
 
 static const hoja_haptic_frame_s *haptics_get_sample_at(const hoja_rumble_msg_s *msg, uint8_t idx)
@@ -114,6 +126,27 @@ static bool haptics_msg_has_active_samples(const hoja_rumble_msg_s *msg)
     }
 
     return false;
+}
+
+static void haptics_note_active_now(void)
+{
+    s_last_active_tick = xTaskGetTickCount();
+}
+
+static bool haptics_hold_window_expired(void)
+{
+    TickType_t now;
+    TickType_t hold_ticks;
+
+    if (s_last_active_tick == 0)
+    {
+        return true;
+    }
+
+    now = xTaskGetTickCount();
+    hold_ticks = pdMS_TO_TICKS(HAPTICS_SILENT_HOLD_MS);
+
+    return ((now - s_last_active_tick) >= hold_ticks);
 }
 
 const Switch5BitCommand_s CommandTable[] = {
@@ -549,60 +582,66 @@ static int8_t haptics_rtp_from_amplitude(float amplitude)
     return (int8_t)(scaled * 127.0f);
 }
 
-static void haptics_log_play_left(const hoja_haptic_frame_s *sample, drv2625_test_mode_t mode, int8_t rtp)
-{
-    float total_amp = sample->low_amplitude + sample->high_amplitude;
-    float selected_freq = (sample->high_amplitude > sample->low_amplitude) ?
-                          sample->high_frequency : sample->low_frequency;
-
-    s_play_stop_logged = false;
-
-    ESP_LOGI(TAG,
-             "PLAY L: hi_f=%.1f lo_f=%.1f hi_a=%.3f lo_a=%.3f total=%.3f sel_f=%.1f mode=%d rtp=%d",
-             sample->high_frequency,
-             sample->low_frequency,
-             sample->high_amplitude,
-             sample->low_amplitude,
-             total_amp,
-             selected_freq,
-             (int)mode,
-             (int)rtp);
-}
-
-static void haptics_log_play_right(const hoja_haptic_frame_s *sample, drv2625_test_mode_t mode, int8_t rtp)
-{
-    float total_amp = sample->low_amplitude + sample->high_amplitude;
-    float selected_freq = (sample->high_amplitude > sample->low_amplitude) ?
-                          sample->high_frequency : sample->low_frequency;
-
-    s_play_stop_logged = false;
-
-    ESP_LOGI(TAG,
-             "PLAY R: hi_f=%.1f lo_f=%.1f hi_a=%.3f lo_a=%.3f total=%.3f sel_f=%.1f mode=%d rtp=%d",
-             sample->high_frequency,
-             sample->low_frequency,
-             sample->high_amplitude,
-             sample->low_amplitude,
-             total_amp,
-             selected_freq,
-             (int)mode,
-             (int)rtp);
-}
-
-static void haptics_log_play_broadcast(const hoja_haptic_frame_s *left_sample,
-                                       const hoja_haptic_frame_s *right_sample,
+static void haptics_log_play_left_band(const hoja_haptic_frame_s *sample,
+                                       const char *band,
+                                       float selected_freq,
+                                       float selected_amp,
                                        drv2625_test_mode_t mode,
-                                       int8_t rtp,
-                                       float total_amp,
-                                       float selected_freq)
+                                       int8_t rtp)
 {
     s_play_stop_logged = false;
 
     ESP_LOGI(TAG,
-             "PLAY BCAST: "
+             "PLAY L/%s: hi_f=%.1f lo_f=%.1f hi_a=%.3f lo_a=%.3f sel_f=%.1f sel_a=%.3f mode=%d rtp=%d",
+             band,
+             sample->high_frequency,
+             sample->low_frequency,
+             sample->high_amplitude,
+             sample->low_amplitude,
+             selected_freq,
+             selected_amp,
+             (int)mode,
+             (int)rtp);
+}
+
+static void haptics_log_play_right_band(const hoja_haptic_frame_s *sample,
+                                        const char *band,
+                                        float selected_freq,
+                                        float selected_amp,
+                                        drv2625_test_mode_t mode,
+                                        int8_t rtp)
+{
+    s_play_stop_logged = false;
+
+    ESP_LOGI(TAG,
+             "PLAY R/%s: hi_f=%.1f lo_f=%.1f hi_a=%.3f lo_a=%.3f sel_f=%.1f sel_a=%.3f mode=%d rtp=%d",
+             band,
+             sample->high_frequency,
+             sample->low_frequency,
+             sample->high_amplitude,
+             sample->low_amplitude,
+             selected_freq,
+             selected_amp,
+             (int)mode,
+             (int)rtp);
+}
+
+static void haptics_log_play_broadcast_band(const hoja_haptic_frame_s *left_sample,
+                                            const hoja_haptic_frame_s *right_sample,
+                                            const char *band,
+                                            float selected_freq,
+                                            float selected_amp,
+                                            drv2625_test_mode_t mode,
+                                            int8_t rtp)
+{
+    s_play_stop_logged = false;
+
+    ESP_LOGI(TAG,
+             "PLAY BCAST/%s: "
              "L[hi_f=%.1f lo_f=%.1f hi_a=%.3f lo_a=%.3f] "
              "R[hi_f=%.1f lo_f=%.1f hi_a=%.3f lo_a=%.3f] "
-             "total=%.3f sel_f=%.1f mode=%d rtp=%d",
+             "sel_f=%.1f sel_a=%.3f mode=%d rtp=%d",
+             band,
              left_sample ? left_sample->high_frequency : 0.0f,
              left_sample ? left_sample->low_frequency : 0.0f,
              left_sample ? left_sample->high_amplitude : 0.0f,
@@ -611,8 +650,8 @@ static void haptics_log_play_broadcast(const hoja_haptic_frame_s *left_sample,
              right_sample ? right_sample->low_frequency : 0.0f,
              right_sample ? right_sample->high_amplitude : 0.0f,
              right_sample ? right_sample->low_amplitude : 0.0f,
-             total_amp,
              selected_freq,
+             selected_amp,
              (int)mode,
              (int)rtp);
 }
@@ -692,27 +731,32 @@ static esp_err_t haptics_enter_broadcast_path(drv2625_test_mode_t mode)
     return ESP_OK;
 }
 
-static void haptics_play_left_sample(const hoja_haptic_frame_s *sample)
+static void haptics_delay_ms(uint32_t ms)
 {
-    float total_amp;
-    float selected_freq;
+    if (ms > 0U)
+    {
+        vTaskDelay(pdMS_TO_TICKS(ms));
+    }
+}
+
+static void haptics_play_left_band(const hoja_haptic_frame_s *sample,
+                                   const char *band,
+                                   float selected_freq,
+                                   float selected_amp,
+                                   uint32_t hold_ms)
+{
     drv2625_test_mode_t mode;
     int8_t rtp;
 
-    if ((sample == NULL) || !haptics_sample_active(sample))
+    if (!haptics_band_active(selected_amp))
     {
-        haptics_log_play_stop();
-        (void)drv2625_set_rtp_channel(DRV2625_CH_LEFT, 0);
         return;
     }
 
-    total_amp = sample->low_amplitude + sample->high_amplitude;
-    selected_freq = (sample->high_amplitude > sample->low_amplitude) ?
-                    sample->high_frequency : sample->low_frequency;
     mode = haptics_mode_from_frequency(selected_freq);
-    rtp = haptics_rtp_from_amplitude(total_amp);
+    rtp = haptics_rtp_from_amplitude(selected_amp);
 
-    haptics_log_play_left(sample, mode, rtp);
+    haptics_log_play_left_band(sample, band, selected_freq, selected_amp, mode, rtp);
 
     if ((!s_mode_valid_left) || (mode != s_last_mode_left))
     {
@@ -724,29 +768,28 @@ static void haptics_play_left_sample(const hoja_haptic_frame_s *sample)
     }
 
     (void)drv2625_set_rtp_channel(DRV2625_CH_LEFT, rtp);
+    haptics_note_active_now();
+    haptics_delay_ms(hold_ms);
 }
 
-static void haptics_play_right_sample(const hoja_haptic_frame_s *sample)
+static void haptics_play_right_band(const hoja_haptic_frame_s *sample,
+                                    const char *band,
+                                    float selected_freq,
+                                    float selected_amp,
+                                    uint32_t hold_ms)
 {
-    float total_amp;
-    float selected_freq;
     drv2625_test_mode_t mode;
     int8_t rtp;
 
-    if ((sample == NULL) || !haptics_sample_active(sample))
+    if (!haptics_band_active(selected_amp))
     {
-        haptics_log_play_stop();
-        (void)drv2625_set_rtp_channel(DRV2625_CH_RIGHT, 0);
         return;
     }
 
-    total_amp = sample->low_amplitude + sample->high_amplitude;
-    selected_freq = (sample->high_amplitude > sample->low_amplitude) ?
-                    sample->high_frequency : sample->low_frequency;
     mode = haptics_mode_from_frequency(selected_freq);
-    rtp = haptics_rtp_from_amplitude(total_amp);
+    rtp = haptics_rtp_from_amplitude(selected_amp);
 
-    haptics_log_play_right(sample, mode, rtp);
+    haptics_log_play_right_band(sample, band, selected_freq, selected_amp, mode, rtp);
 
     if ((!s_mode_valid_right) || (mode != s_last_mode_right))
     {
@@ -758,46 +801,29 @@ static void haptics_play_right_sample(const hoja_haptic_frame_s *sample)
     }
 
     (void)drv2625_set_rtp_channel(DRV2625_CH_RIGHT, rtp);
+    haptics_note_active_now();
+    haptics_delay_ms(hold_ms);
 }
 
-static void haptics_play_broadcast_sample(const hoja_haptic_frame_s *left_sample,
-                                          const hoja_haptic_frame_s *right_sample)
+static void haptics_play_broadcast_band(const hoja_haptic_frame_s *left_sample,
+                                        const hoja_haptic_frame_s *right_sample,
+                                        const char *band,
+                                        float selected_freq,
+                                        float selected_amp,
+                                        uint32_t hold_ms)
 {
-    float left_total;
-    float right_total;
-    float total_amp;
-    float left_freq;
-    float right_freq;
-    float selected_freq;
     drv2625_test_mode_t mode;
     int8_t rtp;
 
-    if ((!haptics_sample_active(left_sample)) && (!haptics_sample_active(right_sample)))
+    if (!haptics_band_active(selected_amp))
     {
-        haptics_log_play_stop();
-        (void)drv2625_stop_broadcast();
         return;
     }
 
-    left_total = haptics_sample_active(left_sample) ?
-                 (left_sample->low_amplitude + left_sample->high_amplitude) : 0.0f;
-    right_total = haptics_sample_active(right_sample) ?
-                  (right_sample->low_amplitude + right_sample->high_amplitude) : 0.0f;
-
-    left_freq = haptics_sample_active(left_sample) ?
-                ((left_sample->high_amplitude > left_sample->low_amplitude) ?
-                 left_sample->high_frequency : left_sample->low_frequency) : 160.0f;
-    right_freq = haptics_sample_active(right_sample) ?
-                 ((right_sample->high_amplitude > right_sample->low_amplitude) ?
-                  right_sample->high_frequency : right_sample->low_frequency) : 160.0f;
-
-    total_amp = 0.5f * (left_total + right_total);
-    selected_freq = 0.5f * (left_freq + right_freq);
-
     mode = haptics_mode_from_frequency(selected_freq);
-    rtp = haptics_rtp_from_amplitude(total_amp);
+    rtp = haptics_rtp_from_amplitude(selected_amp);
 
-    haptics_log_play_broadcast(left_sample, right_sample, mode, rtp, total_amp, selected_freq);
+    haptics_log_play_broadcast_band(left_sample, right_sample, band, selected_freq, selected_amp, mode, rtp);
 
     if (haptics_enter_broadcast_path(mode) != ESP_OK)
     {
@@ -805,6 +831,157 @@ static void haptics_play_broadcast_sample(const hoja_haptic_frame_s *left_sample
     }
 
     (void)drv2625_set_broadcast_rtp(rtp);
+    haptics_note_active_now();
+    haptics_delay_ms(hold_ms);
+}
+
+static void haptics_play_left_sample(const hoja_haptic_frame_s *sample)
+{
+    float selected_freq;
+    float selected_amp;
+
+    if ((sample == NULL) || !haptics_sample_active(sample))
+    {
+        haptics_log_play_stop();
+        (void)drv2625_set_rtp_channel(DRV2625_CH_LEFT, 0);
+        haptics_delay_ms(HAPTICS_SUBFRAME_DELAY_MS);
+        return;
+    }
+
+    if (sample->high_amplitude > sample->low_amplitude)
+    {
+        selected_freq = sample->high_frequency;
+    }
+    else
+    {
+        selected_freq = sample->low_frequency;
+    }
+
+    selected_amp = 0.5f * (sample->high_amplitude + sample->low_amplitude);
+
+    if (haptics_band_active(selected_amp))
+    {
+        haptics_play_left_band(sample, "SEL", selected_freq, selected_amp, HAPTICS_SUBFRAME_DELAY_MS);
+    }
+    else
+    {
+        haptics_log_play_stop();
+        (void)drv2625_set_rtp_channel(DRV2625_CH_LEFT, 0);
+        haptics_delay_ms(HAPTICS_SUBFRAME_DELAY_MS);
+    }
+}
+
+static void haptics_play_right_sample(const hoja_haptic_frame_s *sample)
+{
+    float selected_freq;
+    float selected_amp;
+
+    if ((sample == NULL) || !haptics_sample_active(sample))
+    {
+        haptics_log_play_stop();
+        (void)drv2625_set_rtp_channel(DRV2625_CH_RIGHT, 0);
+        haptics_delay_ms(HAPTICS_SUBFRAME_DELAY_MS);
+        return;
+    }
+
+    if (sample->high_amplitude > sample->low_amplitude)
+    {
+        selected_freq = sample->high_frequency;
+    }
+    else
+    {
+        selected_freq = sample->low_frequency;
+    }
+
+    selected_amp = 0.5f * (sample->high_amplitude + sample->low_amplitude);
+
+    if (haptics_band_active(selected_amp))
+    {
+        haptics_play_right_band(sample, "SEL", selected_freq, selected_amp, HAPTICS_SUBFRAME_DELAY_MS);
+    }
+    else
+    {
+        haptics_log_play_stop();
+        (void)drv2625_set_rtp_channel(DRV2625_CH_RIGHT, 0);
+        haptics_delay_ms(HAPTICS_SUBFRAME_DELAY_MS);
+    }
+}
+
+static void haptics_play_broadcast_sample(const hoja_haptic_frame_s *left_sample,
+                                          const hoja_haptic_frame_s *right_sample)
+{
+    float left_selected_freq;
+    float right_selected_freq;
+    float left_selected_amp;
+    float right_selected_amp;
+    float selected_freq;
+    float selected_amp;
+
+    if ((!haptics_sample_active(left_sample)) && (!haptics_sample_active(right_sample)))
+    {
+        haptics_log_play_stop();
+        (void)drv2625_stop_broadcast();
+        haptics_delay_ms(HAPTICS_SUBFRAME_DELAY_MS);
+        return;
+    }
+
+    if ((left_sample != NULL) && haptics_sample_active(left_sample))
+    {
+        left_selected_freq = (left_sample->high_amplitude > left_sample->low_amplitude) ?
+                             left_sample->high_frequency : left_sample->low_frequency;
+        left_selected_amp = 0.5f * (left_sample->high_amplitude + left_sample->low_amplitude);
+    }
+    else
+    {
+        left_selected_freq = 0.0f;
+        left_selected_amp = 0.0f;
+    }
+
+    if ((right_sample != NULL) && haptics_sample_active(right_sample))
+    {
+        right_selected_freq = (right_sample->high_amplitude > right_sample->low_amplitude) ?
+                              right_sample->high_frequency : right_sample->low_frequency;
+        right_selected_amp = 0.5f * (right_sample->high_amplitude + right_sample->low_amplitude);
+    }
+    else
+    {
+        right_selected_freq = 0.0f;
+        right_selected_amp = 0.0f;
+    }
+
+    if ((left_selected_amp >= right_selected_amp) && haptics_band_active(left_selected_amp))
+    {
+        selected_freq = left_selected_freq;
+    }
+    else if (haptics_band_active(right_selected_amp))
+    {
+        selected_freq = right_selected_freq;
+    }
+    else
+    {
+        haptics_log_play_stop();
+        (void)drv2625_stop_broadcast();
+        haptics_delay_ms(HAPTICS_SUBFRAME_DELAY_MS);
+        return;
+    }
+
+    selected_amp = 0.5f * (left_selected_amp + right_selected_amp);
+
+    if (haptics_band_active(selected_amp))
+    {
+        haptics_play_broadcast_band(left_sample,
+                                    right_sample,
+                                    "SEL",
+                                    selected_freq,
+                                    selected_amp,
+                                    HAPTICS_SUBFRAME_DELAY_MS);
+    }
+    else
+    {
+        haptics_log_play_stop();
+        (void)drv2625_stop_broadcast();
+        haptics_delay_ms(HAPTICS_SUBFRAME_DELAY_MS);
+    }
 }
 
 static void haptics_apply_frame(const haptics_packet_frame_s *frame)
@@ -820,8 +997,15 @@ static void haptics_apply_frame(const haptics_packet_frame_s *frame)
 
     if (max_samples == 0)
     {
-        haptics_log_play_stop();
-        haptics_stop_all_paths();
+        if (haptics_hold_window_expired())
+        {
+            haptics_log_play_stop();
+            haptics_stop_all_paths();
+        }
+        else
+        {
+            haptics_delay_ms(HAPTICS_SUBFRAME_DELAY_MS);
+        }
         return;
     }
 
@@ -858,14 +1042,17 @@ static void haptics_apply_frame(const haptics_packet_frame_s *frame)
         }
         else
         {
-            haptics_log_play_stop();
-            haptics_stop_all_paths();
+            if (haptics_hold_window_expired())
+            {
+                haptics_log_play_stop();
+                haptics_stop_all_paths();
+            }
+            else
+            {
+                haptics_delay_ms(HAPTICS_SUBFRAME_DELAY_MS);
+            }
         }
 
-        if ((i + 1U) < max_samples)
-        {
-            vTaskDelay(pdMS_TO_TICKS(HAPTICS_SUBFRAME_DELAY_MS));
-        }
     }
 }
 
